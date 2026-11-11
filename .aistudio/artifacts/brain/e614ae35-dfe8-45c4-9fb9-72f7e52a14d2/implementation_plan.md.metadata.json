@@ -1,0 +1,6 @@
+{
+  "summary":  "Updated architecture blueprint and implementation records reflecting the complete removal of 401(k) sliders from the health dashboard. Baseline Gross AGI represents Form 1040 line 11 (Box 1 W-2, already net of 401(k) deferrals under IRC § 402(g)). Pre-tax diversion on the health dashboard is driven by the Pre-Tax Diversion Slider (Trad-IRA / Qual-Annuity), with MFJ Kay Bailey Hutchison spousal limits and 100% FPL + $100 floor safeguards. All questionnaire coverage questions, Life accordion positioning, Annuities FIA chart, and pre-booking disclaimer modals remain fully intact and validated.",
+  "updatedAt":  "2026-11-10T23:30:10.492077770Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -1,0 +1,57 @@
+**Yes, but with critical caveats regarding income phase-out limits.**
+
+Whether you set up a **Solo 401(k)** or a **SEP-IRA** funded by a qualified annuity, your client **can still stack an individual Traditional IRA contribution** to lower their AGI further. However, opening or participating in a Solo 401(k) or SEP-IRA officially classifies your client as an **"active participant"** in an employer retirement plan for IRS tax purposes.
+
+This classification triggers strict IRS Modified Adjusted Gross Income (MAGI) phase-out rules that determine if their additional Traditional IRA contribution is tax-deductible.
+
+---
+
+### 1. Solo 401(k) vs. SEP-IRA: Active Participant Status
+
+* **Solo 401(k):** Making either an employee salary deferral or an employer profit-sharing contribution automatically flags your client as an active plan participant.
+* **SEP-IRA:** Even though a SEP-IRA is funded *solely* by employer contributions, contributing even $1 into a SEP-IRA marks the business owner as an active participant for that tax year.
+
+---
+
+### 2. The Traditional IRA Income Phase-Out Trap
+
+Because they are now an active participant, their ability to deduct their individual Traditional IRA contribution (up to $7,500/year, or $8,500 if age 50+) on **Form 1040, Schedule 1** depends entirely on household income:
+
+#### Single Filers (Active Participant)
+
+* **Full Tax Deduction:** Household MAGI is under **$79,000**.
+* **Partial Tax Deduction:** Household MAGI is between **$79,000 and $89,000**.
+* **No Tax Deduction:** Household MAGI is over **$89,000**. *(An un-deductible IRA contribution does NOT lower AGI/ACA MAGI).*
+
+#### Married Filing Jointly (Active Participant)
+
+* **Full Tax Deduction:** Household MAGI is under **$129,000**.
+* **Partial Tax Deduction:** Household MAGI is between **$129,000 and $149,000**.
+* **No Tax Deduction:** Household MAGI is over **$149,000**.
+
+---
+
+### 3. The "Spousal IRA" Loophole for ACA Optimization
+
+If your client is married and their income exceeds the $149,000 limit, there is a major strategic workaround if **their spouse does not participate in an employer plan**:
+
+* **Uncovered Spouse Rule:** The spouse who is *not* covered by a workplace plan (or Solo 401k/SEP) faces a much higher phase-out bracket.
+* **Income Bracket:** The uncovered spouse can take a **full Traditional IRA deduction** as long as household MAGI is under **$242,000** (phasing out at **$252,000**).
+* **ACA Impact:** Deducting $7,500–$8,500 via the spouse's Traditional IRA directly reduces the joint Household AGI, lowering the ACA premium cost on Healthcare.gov.
+
+---
+
+### Strategic Comparison Matrix for Insurance Agents
+
+| Qualified Product Vehicle | Max Contribution Limit | AGI Reduction Impact | Active Participant Flag Triggered? |
+| --- | --- | --- | --- |
+| **Solo 401(k) Annuity** | Up to **$72,000** (plus catch-ups) | **Direct:** Salary Deferral + Employer Profit Share lower AGI on Schedule 1 / W-2. | **Yes** — Limits additional Trad-IRA deduction if MAGI > $129k (MFJ). |
+| **SEP-IRA Annuity** | Up to 25% of net profit (Max **$72,000**) | **Direct:** Lowers Schedule 1 Line 16 self-employed retirement deduction. | **Yes** — Limits additional Trad-IRA deduction if MAGI > $129k (MFJ). |
+| **Stacked Trad-IRA Annuity** | Up to **$7,500** ($8,500 if 50+) | **Conditional:** Only lowers AGI if income is below IRS phase-out limits. | N/A |
+| **Stacked Spousal IRA** | Up to **$7,500** ($8,500 if 50+) | **High Potential:** Deductible up to **$242k–$252k MAGI** if spouse is uncovered. | **No** (for the non-working/uncovered spouse) |
+
+---
+
+### Takeaway for Client Strategy
+
+If your self-employed client hasn't hit the maximum SEP-IRA or Solo 401(k) contribution cap yet, **it is usually much easier to increase their Solo 401(k) or SEP-IRA contribution** to drive down AGI, rather than relying on a separate Traditional IRA that might hit an income phase-out wall. Stack the individual IRA only if their income falls below the phase-out range or if you are using the Spousal IRA exemption.

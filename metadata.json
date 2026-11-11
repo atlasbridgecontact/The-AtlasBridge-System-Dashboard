@@ -1,0 +1,6 @@
+{
+  "name": "AtlasBridge Master Platform v7 - Health, Wealth & Policy Audit Suite",
+  "description": "Comprehensive Health, Wealth, and Policy Audit Suite by AtlasBridge Insurance Group LLC, featuring ACA pre-tax optimization, policy 1035 audits, annuities, and life insurance strategy.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
