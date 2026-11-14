@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { ClientData, HealthCarrierId } from '../../types';
+import { ActiveStrategySnapshot, ClientData, HealthCarrierId } from '../../types';
 import {
   getIRSLimitForAge,
   getHouseholdSize,
@@ -10,6 +10,7 @@ import {
 } from '../../utils/calculations';
 import { REGIONAL_HEALTH_CARRIERS } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
+import { ProviderNetworkMap } from './ProviderNetworkMap';
 
 Chart.register(...registerables);
 
@@ -17,12 +18,13 @@ interface AtlasBridgeDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   clientData,
   onChangeClientData,
-  onOpenBooking,
+  onUpdateStrategySnapshot,
 }) => {
   const isMarried = clientData.filingStatus === 'married';
   const has401k = clientData.active401k;
@@ -45,6 +47,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const [spouseIraContrib, setSpouseIraContrib] = useState<number>(Math.min(initialSpouseIRA, spouseIraCap));
   const [selectedTier, setSelectedTier] = useState<string>('auto');
   const [isScenariosOpen, setIsScenariosOpen] = useState<boolean>(false);
+  const [isProviderMapOpen, setIsProviderMapOpen] = useState<boolean>(false);
   const [walkInDate, setWalkInDate] = useState<string>('2026-11-05');
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
@@ -108,13 +111,65 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const taxRelief = Math.round(annualContrib * marginalTaxRate);
 
   // Adjusted ACA
-  const adjustedMAGI = Math.max(povertyFloor, clientData.grossAGI - totalPreTaxMAGIReduction);
+  const adjustedMAGI =
+    clientData.grossAGI <= povertyFloor
+      ? clientData.grossAGI
+      : Math.max(povertyFloor, clientData.grossAGI - totalPreTaxMAGIReduction);
   const adjAca = calculateAcaDetails(adjustedMAGI, householdSize, clientData.clientAge);
 
+  // Plan tier adjustments (Bronze / Silver / Gold)
+  let displayPlanName = adjAca.csrLevel;
+  let displayPrem = adjAca.netMonthlyPremium;
+  let displayDed = adjAca.deductible;
+  let displayOop = adjAca.oopMax;
+  let displayAv = adjAca.av;
+
+  if (selectedTier === 'bronze') {
+    displayPlanName = 'Bronze High-Deductible Tier';
+    displayPrem = Math.round(adjAca.netMonthlyPremium * 0.7);
+    displayDed = Math.round(adjAca.deductible > 0 ? adjAca.deductible * 2.2 : 7500);
+    displayOop = 9100;
+    displayAv = '60% Bronze';
+  } else if (selectedTier === 'silver') {
+    displayPlanName = 'Standard Silver (70% AV)';
+  } else if (selectedTier === 'gold') {
+    displayPlanName = 'Gold Preferred Copay Tier';
+    displayPrem = Math.round(adjAca.netMonthlyPremium * 1.5);
+    displayDed = Math.round(adjAca.deductible * 0.4);
+    displayAv = '80% Gold';
+  }
+
   const subsidyShiftAnnual = Math.max(0, (adjAca.monthlySubsidy - origAca.monthlySubsidy) * 12);
-  const deductibleShield = Math.max(0, origAca.deductible - adjAca.deductible);
+  const monthlyAptcGain = Math.max(0, adjAca.monthlySubsidy - origAca.monthlySubsidy);
+  const deductibleShield = Math.max(0, origAca.deductible - displayDed);
+  const oopShield = Math.max(0, origAca.oopMax - displayOop);
   const totalComprehensiveSavings = subsidyShiftAnnual + deductibleShield + taxRelief;
-  const netFinancialSwing = totalComprehensiveSavings + combinedIRA;
+  const totalComprehensiveAdvantage = annualContrib + taxRelief + deductibleShield + subsidyShiftAnnual;
+  const netFinancialSwing = totalComprehensiveAdvantage;
+
+  // ACA CSR Tier Thresholds & Next-Tier Headroom
+  const csrThreshold250 = Math.round(origAca.fpl100 * 2.5);
+  const csrThreshold200 = Math.round(origAca.fpl100 * 2.0);
+  const csrThreshold150 = Math.round(origAca.fpl100 * 1.5);
+  let nextCsrLabel = 'Max 94% Silver CSR Unlocked';
+  let nextCsrDollarsNeeded = 0;
+
+  if (adjAca.fplPct > 250) {
+    nextCsrLabel = '73% Silver CSR (250% FPL)';
+    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold250);
+  } else if (adjAca.fplPct > 200) {
+    nextCsrLabel = '87% Silver CSR (200% FPL)';
+    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold200);
+  } else if (adjAca.fplPct > 150) {
+    nextCsrLabel = '94% Max Silver CSR (150% FPL)';
+    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold150);
+  }
+
+  const famMult = householdSize > 1 ? 1.8 : 1.0;
+  const legacyMonthlyOverhead = Math.round(600 * famMult);
+  const legacyAnnualPrem = legacyMonthlyOverhead * 12;
+  const monthlyDPC = Math.round(85 * (householdSize > 1 ? 1.5 : 1.0));
+  const atlasAnnualPrem = (monthlyDPC + displayPrem) * 12;
 
   const currentCarrier = REGIONAL_HEALTH_CARRIERS.find((c) => c.id === clientData.selectedHealthCarrier) || REGIONAL_HEALTH_CARRIERS[0];
 
@@ -129,10 +184,76 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
     onChangeClientData({
       existingAnnuityCash: iraContrib,
       spouseExistingAnnuityCash: spouseIraContrib,
+      annuityAnnualContribution: iraContrib + spouseIraContrib,
     });
   }, [iraContrib, spouseIraContrib]);
 
-  // Chart setup
+  // Sync live dashboard snapshot for advisor email docket
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    const sliders: Array<{ label: string; value: string }> = [
+      { label: 'Target Tax Year', value: clientData.taxYear },
+      { label: 'Gross Annual AGI (Slider)', value: `$${clientData.grossAGI.toLocaleString()}/yr` },
+      {
+        label: isMarried ? 'Primary Client Trad-IRA / Qual-Annuity' : 'Trad-IRA / Qual-Annuity Diversion',
+        value: `$${actualClientIRA.toLocaleString()}/yr`,
+      },
+    ];
+    if (isMarried) {
+      sliders.push({
+        label: 'Spouse Trad-IRA / Qual-Annuity (IRC 219(c))',
+        value: `$${actualSpouseIRA.toLocaleString()}/yr`,
+      });
+    }
+    sliders.push(
+      { label: 'Selected Carrier', value: currentCarrier.name },
+      { label: 'Selected Plan Tier', value: `${displayPlanName} (${selectedTier.toUpperCase()})` },
+      { label: 'Preferred Walk-In / Consultation Date', value: walkInDate }
+    );
+
+    onUpdateStrategySnapshot({
+      pathId: 'atlasbridge',
+      pathLabel: 'ACA + Atlasbridge System',
+      summaryHeadline: `${displayPlanName} via ${currentCarrier.name} with $${combinedDeductibleIRA.toLocaleString()}/yr deductible MAGI reduction`,
+      selectedCarrierOrVendor: currentCarrier.name,
+      selectedTierOrOption: displayPlanName,
+      sliders,
+      impactMetrics: [
+        { label: 'Baseline AGI -> Adjusted MAGI', value: `$${clientData.grossAGI.toLocaleString()} -> $${adjustedMAGI.toLocaleString()}` },
+        { label: 'FPL Shift', value: `${origAca.fplPct}% FPL -> ${adjAca.fplPct}% FPL` },
+        { label: 'Deductible Trad-IRA MAGI Reduction', value: `$${combinedDeductibleIRA.toLocaleString()}/yr` },
+        { label: 'Est. Monthly Net ACA Premium', value: `$${displayPrem}/mo (Deductible $${displayDed.toLocaleString()} | Max OOP $${displayOop.toLocaleString()})` },
+        { label: 'Additional Annual ACA Subsidy (APTC)', value: `+$${subsidyShiftAnnual.toLocaleString()}/yr (+$${monthlyAptcGain.toLocaleString()}/mo)` },
+        { label: 'Direct IRS Income Tax Savings', value: `+$${taxRelief.toLocaleString()}/yr (${Math.round(marginalTaxRate * 100)}% bracket)` },
+        { label: 'Total Comprehensive Financial Advantage', value: `+$${totalComprehensiveAdvantage.toLocaleString()}/yr` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    clientData.taxYear,
+    clientData.grossAGI,
+    isMarried,
+    actualClientIRA,
+    actualSpouseIRA,
+    currentCarrier.name,
+    displayPlanName,
+    selectedTier,
+    walkInDate,
+    combinedDeductibleIRA,
+    adjustedMAGI,
+    origAca.fplPct,
+    adjAca.fplPct,
+    displayPrem,
+    displayDed,
+    displayOop,
+    subsidyShiftAnnual,
+    monthlyAptcGain,
+    taxRelief,
+    marginalTaxRate,
+    totalComprehensiveAdvantage,
+  ]);
+
+  // Chart setup (Comprehensive Cost & Wealth System Comparison)
   useEffect(() => {
     if (!isScenariosOpen || !chartRef.current) return;
 
@@ -146,27 +267,17 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
     chartInstanceRef.current = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: ['Status Quo (No Optimization)', 'Traditional ACA Exchange', 'AtlasBridge System (Dual Engine)'],
+        labels: ['Premiums', 'Deductible', 'Subsidies', 'Max OOP'],
         datasets: [
           {
-            label: 'Healthcare Out-of-Pocket / Loss ($)',
-            data: [
-              Math.round(origAca.netMonthlyPremium * 12 + origAca.deductible * 0.5),
-              Math.round(origAca.netMonthlyPremium * 12),
-              Math.round(adjAca.netMonthlyPremium * 12),
-            ],
-            backgroundColor: ['rgba(239, 68, 68, 0.7)', 'rgba(59, 130, 246, 0.7)', 'rgba(16, 185, 129, 0.7)'],
-            borderColor: ['#ef4444', '#3b82f6', '#10b981'],
-            borderWidth: 1,
-            borderRadius: 6,
+            label: 'Old Fashioned Way',
+            data: [legacyAnnualPrem, origAca.deductible, 0, origAca.oopMax],
+            backgroundColor: '#ef4444',
           },
           {
-            label: 'Retained Wealth & Tax Advantage ($)',
-            data: [0, 0, Math.round(netFinancialSwing)],
-            backgroundColor: ['rgba(148, 163, 184, 0.2)', 'rgba(148, 163, 184, 0.2)', 'rgba(245, 158, 11, 0.7)'],
-            borderColor: ['#94a3b8', '#94a3b8', '#f59e0b'],
-            borderWidth: 1,
-            borderRadius: 6,
+            label: 'The AtlasBridge System',
+            data: [atlasAnnualPrem, displayDed, subsidyShiftAnnual, displayOop],
+            backgroundColor: '#10b981',
           },
         ],
       },
@@ -179,8 +290,18 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
           },
         },
         scales: {
-          x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-          y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          x: {
+            ticks: { color: '#94a3b8', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+          y: {
+            ticks: {
+              color: '#94a3b8',
+              font: { size: 10 },
+              callback: (value) => '$' + Number(value).toLocaleString(),
+            },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
         },
       },
     });
@@ -190,7 +311,16 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
         chartInstanceRef.current.destroy();
       }
     };
-  }, [isScenariosOpen, origAca, adjAca, netFinancialSwing]);
+  }, [
+    isScenariosOpen,
+    legacyAnnualPrem,
+    atlasAnnualPrem,
+    origAca.deductible,
+    displayDed,
+    subsidyShiftAnnual,
+    origAca.oopMax,
+    displayOop,
+  ]);
 
   return (
     <div className="space-y-8">
@@ -253,13 +383,13 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                       <span className="text-blue-400 font-bold">$</span>
                       <input
                         type="number"
-                        min="15000"
+                        min="0"
                         max="300000"
                         step="500"
                         value={clientData.grossAGI}
                         onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 15000;
-                          onChangeClientData({ grossAGI: Math.max(15000, val) });
+                          const val = parseFloat(e.target.value);
+                          onChangeClientData({ grossAGI: Number.isNaN(val) ? 0 : Math.max(0, val) });
                         }}
                         className="w-24 bg-transparent text-white font-extrabold text-sm focus:outline-none text-right"
                       />
@@ -267,33 +397,32 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   </div>
                   <input
                     type="range"
-                    min="15000"
+                    min="0"
                     max="250000"
                     step="500"
                     value={Math.min(250000, clientData.grossAGI)}
                     onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 65000;
-                      SoundFX.playSlideHum((val - 15000) / (250000 - 15000));
-                      onChangeClientData({ grossAGI: val });
+                      const val = parseFloat(e.target.value);
+                      const cleanVal = Number.isNaN(val) ? 0 : val;
+                      SoundFX.playSlideHum(cleanVal / 250000);
+                      onChangeClientData({ grossAGI: cleanVal });
                     }}
                     className="w-full h-2 bg-navy-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
                   />
                   <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium px-0.5">
-                    <span>$15,000 Min</span>
+                    <span>$0 Min</span>
                     <span>IRS Form 1040 Base</span>
                     <span>$250,000+ Max</span>
                   </div>
                 </div>
-              </div>
 
-              {/* Adjusted MAGI & ACA Impact Box */}
-              <div className="pt-2.5 border-t border-navy-800/80 space-y-2 text-xs">
-                <div className="bg-navy-900 p-3 rounded-lg border border-purple-500/40 space-y-2">
+                {/* Adjusted MAGI & ACA Impact Box — directly under Gross Annual AGI slider */}
+                <div className="bg-navy-900 p-3 rounded-lg border border-purple-500/40 space-y-2 text-xs">
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-purple-300 font-bold uppercase tracking-wider">
                       <i className="fa-solid fa-sliders mr-1"></i> Adjusted MAGI &amp; ACA Impact:
                     </span>
-                    <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                    <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 tabular-nums">
                       +${subsidyShiftAnnual.toLocaleString()}/yr Subsidy Shift
                     </span>
                   </div>
@@ -301,23 +430,91 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
                     <div className="bg-navy-950 p-2 rounded border border-navy-800">
                       <span className="text-[9px] text-slate-400 block font-semibold">Original Gross AGI:</span>
-                      <strong className="text-white font-bold block">${clientData.grossAGI.toLocaleString()}</strong>
+                      <strong className="text-white font-bold block tabular-nums">${clientData.grossAGI.toLocaleString()}</strong>
                       <span className="text-[9.5px] text-amber-400 block truncate">{origAca.av} ({currentCarrier.name})</span>
                     </div>
 
                     <div className="bg-navy-950 p-2 rounded border border-purple-500/30">
                       <span className="text-[9px] text-purple-300 block font-semibold">Adjusted MAGI:</span>
-                      <strong className="text-purple-200 font-bold block">${adjustedMAGI.toLocaleString()}</strong>
+                      <strong className="text-purple-200 font-bold block tabular-nums">${adjustedMAGI.toLocaleString()}</strong>
                       <span className="text-[9.5px] text-emerald-400 block truncate">{adjAca.av} ({currentCarrier.name})</span>
                     </div>
                   </div>
                   <div className="text-[10px] text-slate-400 italic flex items-center justify-between pt-0.5">
                     <span>* Auto-adjusted for Pre-Tax Diversion (Trad-IRA / Qual-Annuity).</span>
-                    <span className="text-purple-300 font-semibold">
+                    <span className="text-purple-300 font-semibold tabular-nums">
                       {totalPreTaxMAGIReduction > 0
                         ? `-$${combinedDeductibleIRA.toLocaleString()} Trad-IRA Deduction`
                         : '$0 reduction'}
                     </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mini Breakdown of ACA Potential (fills freed space cleanly) */}
+              <div className="pt-2.5 border-t border-navy-800/80 space-y-2.5 text-xs">
+                <div className="bg-navy-900/90 p-3 rounded-lg border border-blue-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-blue-300 font-bold uppercase tracking-wider">
+                      <i className="fa-solid fa-layer-group mr-1"></i> Mini Breakdown: ACA Potential
+                    </span>
+                    <span className="text-[10.5px] text-slate-300 font-semibold tabular-nums">
+                      {origAca.fplPct}% → <strong className="text-emerald-400">{adjAca.fplPct}% FPL</strong>
+                    </span>
+                  </div>
+
+                  {/* Silver CSR Tier Progression Strip */}
+                  <div className="grid grid-cols-4 gap-1.5 text-center text-[9.5px]">
+                    {[
+                      { label: 'Std 70%', threshold: '>250%', active: adjAca.fplPct > 250 },
+                      { label: '73% CSR', threshold: '≤250%', active: adjAca.fplPct > 200 && adjAca.fplPct <= 250 },
+                      { label: '87% CSR', threshold: '≤200%', active: adjAca.fplPct > 150 && adjAca.fplPct <= 200 },
+                      { label: '94% CSR', threshold: '≤150%', active: adjAca.fplPct <= 150 },
+                    ].map((tier) => (
+                      <div
+                        key={tier.label}
+                        className={`py-1.5 px-1 rounded border transition-colors ${
+                          tier.active
+                            ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300 font-bold'
+                            : 'bg-navy-950/70 border-navy-800 text-slate-500'
+                        }`}
+                      >
+                        <div className="leading-tight">{tier.label}</div>
+                        <div className="text-[8.5px] opacity-80 tabular-nums">{tier.threshold}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Compact 3-Metric Potential Comparison */}
+                  <div className="grid grid-cols-3 gap-2 text-[10.5px]">
+                    <div className="bg-navy-950/80 p-2 rounded border border-navy-800">
+                      <span className="text-[9px] text-slate-400 block">APTC Boost</span>
+                      <strong className="text-emerald-400 font-extrabold tabular-nums">+${monthlyAptcGain.toLocaleString()}/mo</strong>
+                    </div>
+                    <div className="bg-navy-950/80 p-2 rounded border border-navy-800">
+                      <span className="text-[9px] text-slate-400 block">Deductible Cut</span>
+                      <strong className="text-blue-400 font-extrabold tabular-nums">-${deductibleShield.toLocaleString()}</strong>
+                    </div>
+                    <div className="bg-navy-950/80 p-2 rounded border border-navy-800">
+                      <span className="text-[9px] text-slate-400 block">Max OOP Cut</span>
+                      <strong className="text-purple-300 font-extrabold tabular-nums">-${oopShield.toLocaleString()}</strong>
+                    </div>
+                  </div>
+
+                  {/* Next Threshold / Cliff Headroom */}
+                  <div className="flex items-center justify-between text-[10px] pt-1 border-t border-navy-800/80">
+                    <span className="text-slate-400">
+                      {adjAca.fplPct <= 138
+                        ? 'Medicaid Threshold Range (≤138% FPL)'
+                        : nextCsrDollarsNeeded > 0
+                        ? `To ${nextCsrLabel}:`
+                        : 'Silver CSR Status:'}
+                    </span>
+                    <strong className="text-gold-400 font-bold tabular-nums">
+                      {nextCsrDollarsNeeded > 0
+                        ? `-$${nextCsrDollarsNeeded.toLocaleString()} MAGI needed`
+                        : nextCsrLabel}
+                    </strong>
                   </div>
                 </div>
 
@@ -329,8 +526,8 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                     <span className="text-[9px] text-slate-400">APTC Subsidy + Deductible Risk + IRS Tax Relief</span>
                   </div>
                   <div className="text-right">
-                    <div className="text-base font-black text-emerald-400">+${totalComprehensiveSavings.toLocaleString()} / yr</div>
-                    <span className="text-[9px] text-emerald-300 font-semibold">~{adjAca.fplPct}% FPL</span>
+                    <div className="text-base font-black text-emerald-400 tabular-nums">+${totalComprehensiveSavings.toLocaleString()} / yr</div>
+                    <span className="text-[9px] text-emerald-300 font-semibold tabular-nums">~{adjAca.fplPct}% FPL</span>
                   </div>
                 </div>
               </div>
@@ -549,8 +746,8 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
         <div className="bg-navy-950 p-5 rounded-xl border border-blue-500/50 space-y-4 glow-blue">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-navy-700/80 pb-3">
             <div>
-              <h4 className="font-bold text-white text-sm sm:text-base">
-                Active Plan Category: <span className="text-emerald-400">{adjAca.csrLevel}</span>
+              <h4 className="text-base sm:text-lg font-extrabold text-white">
+                Active Plan Category: <span className="text-emerald-400">{displayPlanName}</span> ({currentCarrier.category})
               </h4>
               <p className="text-[11px] text-slate-400">
                 Selected Regional Carrier: <strong className="text-blue-400">{currentCarrier.name}</strong> ({currentCarrier.note})
@@ -598,31 +795,59 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   <option value="gold" className="bg-navy-900 text-white">Gold Plan</option>
                 </select>
               </div>
+
+              <button
+                type="button"
+                aria-expanded={isProviderMapOpen}
+                onClick={() => {
+                  SoundFX.playClick();
+                  setIsProviderMapOpen((prev) => !prev);
+                }}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-extrabold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                  isProviderMapOpen
+                    ? 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-500/20'
+                    : 'bg-navy-900 hover:bg-navy-800 text-blue-300 border-blue-500/40 hover:border-blue-400'
+                }`}
+              >
+                <i className="fa-solid fa-map-location-dot"></i>
+                <span>{isProviderMapOpen ? 'Hide Providers Map' : `Local Providers (${clientData.zipCode || '34994'})`}</span>
+              </button>
             </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-1">
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Monthly ACA Premium</span>
-              <div className="text-base sm:text-lg font-black text-white">${adjAca.netMonthlyPremium} / mo</div>
+              <div className="text-base sm:text-lg font-black text-white">${displayPrem} / mo</div>
               <div className="text-[10px] text-emerald-400">APTC Subsidy Active</div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Family/Ind. Deductible</span>
-              <div className="text-base sm:text-lg font-black text-blue-400">${adjAca.deductible.toLocaleString()} / yr</div>
+              <div className="text-base sm:text-lg font-black text-blue-400">${displayDed.toLocaleString()} / yr</div>
               <div className="text-[10px] text-slate-400">CSR Reduced</div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Max Out-of-Pocket</span>
-              <div className="text-base sm:text-lg font-black text-purple-300">${adjAca.oopMax.toLocaleString()} / yr</div>
+              <div className="text-base sm:text-lg font-black text-purple-300">${displayOop.toLocaleString()} / yr</div>
               <div className="text-[10px] text-slate-400">Protection Cap</div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Actuarial Value (AV)</span>
-              <div className="text-base sm:text-lg font-black text-gold-400">{adjAca.av}</div>
+              <div className="text-base sm:text-lg font-black text-gold-400">{displayAv}</div>
               <div className="text-[10px] text-slate-400">~{adjAca.fplPct}% FPL</div>
             </div>
           </div>
+
+          {isProviderMapOpen && (
+            <ProviderNetworkMap
+              zipCode={clientData.zipCode || '34994'}
+              onChangeZipCode={(zip) => onChangeClientData({ zipCode: zip })}
+              carrier={currentCarrier}
+              onChangeCarrier={(carrierId) => onChangeClientData({ selectedHealthCarrier: carrierId })}
+              selectedTier={selectedTier}
+              displayPlanName={displayPlanName}
+            />
+          )}
         </div>
       </section>
 
@@ -634,7 +859,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
             <i className="fa-solid fa-vault text-emerald-400 text-base"></i>
           </div>
           <div className="text-2xl sm:text-3xl font-extrabold text-white mt-2">
-            +${(annualContrib + taxRelief + subsidyShiftAnnual).toLocaleString()} / yr
+            +${(annualContrib + taxRelief).toLocaleString()} / yr
           </div>
           <p className="text-[11px] text-emerald-400/90 mt-1 flex items-center gap-1">
             <i className="fa-solid fa-arrow-up-right"></i> Direct Pre-tax Assets + Tax Savings
@@ -718,107 +943,154 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
         </div>
       </section>
 
-      {/* Scenario Accordion & Comparison Breakdown */}
-      <section className="glass-card p-5 sm:p-6 border border-navy-700/80 space-y-4">
+      {/* Reverted Detailed Financial & Scenario Breakdown Accordion (Previous v5 Form) */}
+      <div className="pt-2">
         <button
+          type="button"
           onClick={() => {
             SoundFX.playClick();
             setIsScenariosOpen(!isScenariosOpen);
           }}
-          className="w-full flex items-center justify-between text-left cursor-pointer outline-none group"
+          className="w-full glass-card p-4 hover:bg-navy-800/80 transition-all border border-blue-500/40 flex items-center justify-between text-left group shadow-lg glow-blue cursor-pointer"
         >
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-navy-950 border border-blue-500/40 flex items-center justify-center text-blue-400 text-lg shrink-0">
-              <i className="fa-solid fa-table-columns"></i>
+            <div className="w-9 h-9 rounded-lg bg-navy-950 border border-blue-400/40 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
+              <i className="fa-solid fa-chart-pie"></i>
             </div>
             <div>
-              <span className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wider block">Fiduciary Scenario Analysis</span>
-              <h4 className="text-base sm:text-lg font-black text-white group-hover:text-blue-300 transition-colors">
-                {isScenariosOpen ? 'Hide Detailed Financial & Scenario Breakdown' : 'Show Detailed Financial & Scenario Breakdown'}
+              <span className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wider block">
+                Advanced Analytics &amp; Breakdown
+              </span>
+              <h4 className="text-sm sm:text-base font-extrabold text-white">
+                {isScenariosOpen
+                  ? 'Hide Detailed Financial & Scenario Breakdown'
+                  : 'Show Detailed Financial & Scenario Breakdown'}
               </h4>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-blue-400 font-bold hidden sm:inline-block">
-              {isScenariosOpen ? 'Collapse Table & Chart' : 'Expand Table & Chart'}
-            </span>
-            <i className={`fa-solid ${isScenariosOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-blue-400 text-sm`}></i>
-          </div>
+          <i
+            className={`fa-solid ${isScenariosOpen ? 'fa-chevron-up' : 'fa-chevron-down'} text-blue-400 text-lg transition-transform`}
+          ></i>
         </button>
+      </div>
 
-        {isScenariosOpen && (
-          <div className="pt-4 border-t border-navy-800 space-y-6">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead>
-                  <tr className="border-b border-navy-700 text-slate-400 uppercase text-[10px]">
-                    <th className="py-2.5 px-3">Metric / Feature</th>
-                    <th className="py-2.5 px-3 text-rose-400">Scenario A: Status Quo</th>
-                    <th className="py-2.5 px-3 text-blue-400">Scenario B: Standard ACA</th>
-                    <th className="py-2.5 px-3 text-emerald-400 bg-emerald-950/20 rounded-t-lg">
-                      Scenario C: AtlasBridge System
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-navy-800/80 text-slate-300">
-                  <tr>
-                    <td className="py-2.5 px-3 font-semibold text-white">Reported Annual Gross Income</td>
-                    <td className="py-2.5 px-3">${clientData.grossAGI.toLocaleString()}</td>
-                    <td className="py-2.5 px-3">${clientData.grossAGI.toLocaleString()}</td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-300 bg-emerald-950/10">
-                      ${adjustedMAGI.toLocaleString()} (Reduced MAGI)
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-semibold text-white">Pre-Tax Wealth Diversion</td>
-                    <td className="py-2.5 px-3">$0</td>
-                    <td className="py-2.5 px-3">$0</td>
-                    <td className="py-2.5 px-3 font-bold text-gold-400 bg-emerald-950/10">
-                      +${annualContrib.toLocaleString()} / yr (Tax-Deferred Asset)
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-semibold text-white">Monthly Health Premium (Net)</td>
-                    <td className="py-2.5 px-3">${origAca.benchmarkCostMonthly} / mo (Full)</td>
-                    <td className="py-2.5 px-3">${origAca.netMonthlyPremium} / mo</td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-400 bg-emerald-950/10">
-                      ${adjAca.netMonthlyPremium} / mo (Optimized APTC)
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-semibold text-white">Annual Health Deductible</td>
-                    <td className="py-2.5 px-3">$7,500 / yr</td>
-                    <td className="py-2.5 px-3">${origAca.deductible.toLocaleString()} / yr</td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-300 bg-emerald-950/10">
-                      ${adjAca.deductible.toLocaleString()} / yr (CSR Reduced)
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-semibold text-white">Federal Income Tax Relief</td>
-                    <td className="py-2.5 px-3">$0</td>
-                    <td className="py-2.5 px-3">$0</td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-400 bg-emerald-950/10">
-                      +${taxRelief.toLocaleString()} / yr (Form 1040 Sched 1)
-                    </td>
-                  </tr>
-                  <tr className="bg-navy-900/90 font-bold">
-                    <td className="py-3 px-3 text-white">Net Annual Financial Impact</td>
-                    <td className="py-3 px-3 text-rose-400">-$9,200 (Total Loss)</td>
-                    <td className="py-3 px-3 text-blue-400">-$3,400 (Basic Subsidy)</td>
-                    <td className="py-3 px-3 text-gold-400 bg-emerald-950/30 text-sm">
-                      +${netFinancialSwing.toLocaleString()} Net Advantage
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+      {isScenariosOpen && (
+        <div className="scenarios-scroll-box space-y-8">
+          <section className="glass-card p-5 sm:p-8 space-y-6 border-l-4 border-l-blue-500 glow-blue">
+            <div className="border-b border-navy-700/60 pb-3">
+              <span className="text-xs font-extrabold text-blue-400 uppercase tracking-wider block mb-1">
+                <i className="fa-solid fa-bolt text-xs mr-1"></i> Core Strategy Pillars
+              </span>
+              <h3 className="text-lg sm:text-2xl font-black text-white">The Three AtlasBridge Superpowers</h3>
             </div>
 
-            <div className="bg-navy-950 p-4 rounded-xl border border-navy-800 h-72 sm:h-80">
-              <canvas ref={chartRef}></canvas>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-navy-950/90 border border-emerald-500/40 rounded-2xl p-5 space-y-3 relative glow-emerald flex flex-col justify-between">
+                <div className="space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">
+                    Superpower #1
+                  </span>
+                  <h4 className="text-lg font-extrabold text-white">Pre-Tax Wealth Engine</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Redirects money into your own <strong>Qualified Annuity / IRA accounts</strong> instead of insurance company premiums.
+                  </p>
+                </div>
+                <div className="pt-3 border-t border-navy-800 flex justify-between items-center text-xs">
+                  <span className="text-slate-400">Wealth Retained:</span>
+                  <strong className="text-emerald-400 font-extrabold text-sm">
+                    +${annualContrib.toLocaleString()} / yr
+                  </strong>
+                </div>
+              </div>
+
+              <div className="bg-navy-950/90 border border-purple-500/40 rounded-2xl p-5 space-y-3 relative glow-purple flex flex-col justify-between">
+                <div className="space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-300">
+                    Superpower #2
+                  </span>
+                  <h4 className="text-lg font-extrabold text-white">Federal Subsidy Unlocker</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Lower MAGI triggers <strong>higher federal APTC subsidies</strong> and slashes out-of-pocket medical deductible risk.
+                  </p>
+                </div>
+                <div className="pt-3 border-t border-navy-800 flex justify-between items-center text-xs">
+                  <span className="text-slate-400">Subsidies &amp; Risk Saved:</span>
+                  <strong className="text-purple-300 font-extrabold text-sm">
+                    -${deductibleShield.toLocaleString()} Deductible Risk
+                  </strong>
+                </div>
+              </div>
+
+              <div className="bg-navy-950/90 border border-gold-500/40 rounded-2xl p-5 space-y-3 relative glow-gold flex flex-col justify-between">
+                <div className="space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-gold-400">
+                    Superpower #3
+                  </span>
+                  <h4 className="text-lg font-extrabold text-white">Direct Tax Discount</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Lowering your tax bracket rewards you with a <strong>direct IRS tax discount</strong>, putting cash back into your pocket.
+                  </p>
+                </div>
+                <div className="pt-3 border-t border-navy-800 flex justify-between items-center text-xs">
+                  <span className="text-slate-400">Direct IRS Tax Relief:</span>
+                  <strong className="text-gold-400 font-extrabold text-sm">
+                    +${taxRelief.toLocaleString()} / yr ({Math.round(marginalTaxRate * 100)}% Bracket)
+                  </strong>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-      </section>
+          </section>
+
+          <section className="glass-card p-5 sm:p-8 space-y-6">
+            <h3 className="text-lg sm:text-xl font-bold text-white flex items-center justify-between">
+              <span>
+                <i className="fa-solid fa-vault text-emerald-400 mr-2"></i> Comprehensive Cost &amp; Wealth System Comparison
+              </span>
+            </h3>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+              <div className="lg:col-span-7 bg-navy-950 p-4 rounded-xl border border-navy-800 h-80 sm:h-[360px]">
+                <canvas ref={chartRef}></canvas>
+              </div>
+
+              <div className="lg:col-span-5 bg-navy-900/90 border border-emerald-500/40 p-5 rounded-2xl space-y-4 shadow-xl">
+                <div className="border-b border-navy-800 pb-3">
+                  <span className="text-xs font-extrabold text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+                    <i className="fa-solid fa-chart-line text-emerald-400"></i> Financial Performance Breakdown
+                  </span>
+                  <p className="text-[11px] text-slate-400 mt-0.5">The AtlasBridge System vs. Old Fashioned Way</p>
+                </div>
+
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
+                    <span className="text-slate-300 font-semibold">1. Pre-Tax Wealth Built:</span>
+                    <strong className="text-emerald-400 font-extrabold text-sm">${annualContrib.toLocaleString()}</strong>
+                  </div>
+                  <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
+                    <span className="text-slate-300 font-semibold">2. Direct IRS Tax Relief:</span>
+                    <strong className="text-gold-400 font-extrabold text-sm">${taxRelief.toLocaleString()}</strong>
+                  </div>
+                  <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
+                    <span className="text-slate-300 font-semibold">3. Deductible Risk Saved:</span>
+                    <strong className="text-purple-300 font-extrabold text-sm">${deductibleShield.toLocaleString()}</strong>
+                  </div>
+                  <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
+                    <span className="text-slate-300 font-semibold">4. APTC Premium Subsidy Gained:</span>
+                    <strong className="text-cyan-400 font-extrabold text-sm">${subsidyShiftAnnual.toLocaleString()}</strong>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-navy-800 flex justify-between items-center">
+                  <span className="text-xs text-slate-200 font-bold">Total Net Financial Advantage:</span>
+                  <strong className="text-emerald-400 font-black text-base whitespace-nowrap">
+                    +${totalComprehensiveAdvantage.toLocaleString()} / yr
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 };

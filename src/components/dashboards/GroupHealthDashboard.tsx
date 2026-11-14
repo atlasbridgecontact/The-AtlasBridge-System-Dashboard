@@ -1,24 +1,57 @@
-import React, { useState } from 'react';
-import { ClientData } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { SoundFX } from '../../utils/audio';
 
 interface GroupHealthDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const GroupHealthDashboard: React.FC<GroupHealthDashboardProps> = ({
   clientData,
   onChangeClientData,
+  onUpdateStrategySnapshot,
 }) => {
-  const [employeeCount, setEmployeeCount] = useState<number>(Math.max(2, clientData.w2Employees || 5));
+  const [employeeCount, setEmployeeCount] = useState<number>(Math.max(1, clientData.w2Employees || 5));
   const [fundingModel, setFundingModel] = useState<'ichra' | 'level_funded'>('level_funded');
 
   const avgEmpPrem = 520;
   const employerContrib = 0.5; // 50% required min employer contrib
   const monthlyEmployerCost = Math.round(employeeCount * avgEmpPrem * employerContrib);
   const annualTaxDeduction = Math.round(monthlyEmployerCost * 12 * 0.25); // 25% corporate tax rate savings
+  const annualFicaSavings = Math.round(employeeCount * 12 * 45);
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    const modelLabel =
+      fundingModel === 'ichra'
+        ? 'ICHRA / QSEHRA Health Allowance'
+        : 'Level-Funded Small Group PPO';
+    onUpdateStrategySnapshot({
+      pathId: 'group',
+      pathLabel: 'Group Health Plans',
+      summaryHeadline: `${modelLabel} for ${employeeCount} W-2 employees ($${monthlyEmployerCost.toLocaleString()}/mo employer outlay)`,
+      selectedTierOrOption: modelLabel,
+      sliders: [
+        { label: 'Selected Group Funding Model', value: modelLabel },
+        { label: 'Full-Time W-2 Staff Count (Slider)', value: `${employeeCount} employees` },
+      ],
+      impactMetrics: [
+        { label: 'Est. Employer Monthly Outlay (50% contrib)', value: `$${monthlyEmployerCost.toLocaleString()}/mo` },
+        { label: 'Annual IRC Sec 162 Business Tax Deduction', value: `+$${annualTaxDeduction.toLocaleString()}/yr` },
+        { label: 'Annual FICA / Section 125 Payroll Tax Savings', value: `+$${annualFicaSavings.toLocaleString()}/yr` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    fundingModel,
+    employeeCount,
+    monthlyEmployerCost,
+    annualTaxDeduction,
+    annualFicaSavings,
+  ]);
 
   return (
     <div className="space-y-8">

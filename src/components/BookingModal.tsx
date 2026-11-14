@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { BookingFormData, ClientData, StrategyPathConfig } from '../types';
-import { getIRSLimitForAge, getMarginalTaxRate, getRetirementPlanLimitForAge } from '../utils/calculations';
+import { ActiveStrategySnapshot, BookingFormData, ClientData, StrategyPathConfig } from '../types';
+import { getHouseholdSize, getMarginalTaxRate } from '../utils/calculations';
+import { REGIONAL_HEALTH_CARRIERS } from '../utils/constants';
 import { SoundFX } from '../utils/audio';
 
 interface BookingModalProps {
   isOpen: boolean;
   activePath: StrategyPathConfig;
   clientData: ClientData;
+  strategySnapshot: ActiveStrategySnapshot | null;
   onClose: () => void;
   onBookingSuccess: (bookingData: BookingFormData) => void;
 }
@@ -15,6 +17,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   isOpen,
   activePath,
   clientData,
+  strategySnapshot,
   onClose,
   onBookingSuccess,
 }) => {
@@ -33,6 +36,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [isDisclaimerAccepted, setIsDisclaimerAccepted] = useState<boolean>(false);
   const [disclaimerChecked, setDisclaimerChecked] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [formError, setFormError] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -40,67 +44,94 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     e.preventDefault();
 
     if (!formData.cmsConsent) {
-      alert('Please check the CMS ACA Consumer Consent box to proceed with your booking request.');
+      setFormError('Please check the CMS ACA Consumer Consent box to proceed with your booking request.');
       return;
     }
+    setFormError('');
 
     setIsSubmitting(true);
     SoundFX.playClick();
 
-    const currentIRSLimit = getIRSLimitForAge(clientData.clientAge, clientData.filingStatus);
+    const docRefId = `AB-CONF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const dispatchedAt = new Date().toLocaleString();
+    const householdSize = getHouseholdSize(clientData.filingStatus, clientData.dependents);
     const marginalTaxRate = getMarginalTaxRate(clientData.grossAGI, clientData.filingStatus);
-    const taxRelief = Math.round(1000 * marginalTaxRate);
+    const carrierObj = REGIONAL_HEALTH_CARRIERS.find((c) => c.id === clientData.selectedHealthCarrier);
+    const strategyLabel = strategySnapshot?.pathLabel || activePath.label;
+    const isMarried = clientData.filingStatus === 'married';
+
+    const sliderLines =
+      strategySnapshot && strategySnapshot.sliders.length > 0
+        ? strategySnapshot.sliders.map((s) => `  - ${s.label}: ${s.value}`)
+        : [
+            `  - Gross Annual AGI: $${clientData.grossAGI.toLocaleString()}/yr`,
+            `  - Target Tax Year: ${clientData.taxYear}`,
+          ];
+
+    const impactLines =
+      strategySnapshot && strategySnapshot.impactMetrics.length > 0
+        ? strategySnapshot.impactMetrics.map((m) => `  - ${m.label}: ${m.value}`)
+        : [`  - Baseline FPL Ratio: ~${clientData.fplPct}% FPL`];
+
+    const formattedMessage = [
+      `====================================================================`,
+      `ATLASBRIDGE INSURANCE GROUP LLC — STRATEGY & ADVISORY DOCKET`,
+      `====================================================================`,
+      `Reference ID   : ${docRefId}`,
+      `Generated      : ${dispatchedAt}`,
+      `Chosen Path    : ${strategyLabel}`,
+      ...(strategySnapshot?.summaryHeadline ? [`Headline       : ${strategySnapshot.summaryHeadline}`] : []),
+      ...(strategySnapshot?.selectedCarrierOrVendor
+        ? [`Carrier/Vendor : ${strategySnapshot.selectedCarrierOrVendor}`]
+        : carrierObj
+        ? [`Carrier/Vendor : ${carrierObj.name}`]
+        : []),
+      ...(strategySnapshot?.selectedTierOrOption
+        ? [`Plan/Option    : ${strategySnapshot.selectedTierOrOption}`]
+        : []),
+      ``,
+      `1. APPOINTMENT DETAILS & COMPLIANCE CONSENTS`,
+      `--------------------------------------------------------------------`,
+      `  Client Name     : ${formData.fullName}`,
+      `  Email           : ${formData.email}`,
+      `  Phone           : ${formData.phone}`,
+      `  Preferred Date  : ${formData.date} at ${formData.time}`,
+      `  Meeting Address : ${formData.location}`,
+      `  CMS ACA Consent : Granted & Authorized`,
+      `  Tax Agreement   : Accepted (Hypothetical projections acknowledged; CPA consultation urged)`,
+      ``,
+      `2. CHOSEN STRATEGY & LIVE DASHBOARD SLIDERS`,
+      `--------------------------------------------------------------------`,
+      ...sliderLines,
+      ``,
+      `3. PROJECTED FINANCIAL, TAX & ACA IMPACT`,
+      `--------------------------------------------------------------------`,
+      ...impactLines,
+      `  Compliance Refs : Form 1040 Sched 1 (Part II), Form 8962 APTC, Form 1099-R`,
+      ``,
+      `4. HOUSEHOLD & TAX BASELINE PROFILE`,
+      `--------------------------------------------------------------------`,
+      `  Client Age      : ${clientData.clientAge} yrs${isMarried && clientData.spouseAge ? ` | Spouse Age: ${clientData.spouseAge} yrs` : ''}`,
+      `  Filing Status   : ${clientData.filingStatus.toUpperCase()} (Household Size: ${householdSize}, Dependents: ${clientData.dependents})`,
+      `  ZIP Code        : ${clientData.zipCode || 'Not specified'} | Target Tax Year: ${clientData.taxYear}`,
+      `  Gross AGI       : $${clientData.grossAGI.toLocaleString()}/yr (~${clientData.fplPct}% FPL | ${Math.round(marginalTaxRate * 100)}% Bracket)`,
+      `  Liquid Reserves : $${clientData.liquidSavings.toLocaleString()} | Tobacco: ${clientData.tobacco.toUpperCase()} | Pre-Existing: ${clientData.preExisting.toUpperCase()}`,
+      `  Self-Employed   : ${clientData.isSelfEmployed ? `Yes (Est. Net Profit: $${(clientData.netSelfEmploymentProfit || 0).toLocaleString()}/yr)` : 'No'}`,
+      `  Business Owner  : ${clientData.ownsBusiness ? `Yes (${clientData.w2Employees} W-2 employees)` : 'No'}`,
+      `  Health Profile  : ${clientData.healthStatus.toUpperCase()} | ACA Window: ${clientData.acaWindow} | Employer Plan: ${clientData.employerGroup}`,
+      `====================================================================`,
+    ].join('\n');
 
     const payload = {
       access_key: '20bb948b-b496-4f5b-b75f-19a2717e0170',
-      subject: `STRATEGY DOCKET & COMPLIANCE REPORT: ${activePath.label} - ${formData.fullName}`,
+      subject: `STRATEGY DOCKET: ${strategyLabel} — ${formData.fullName} (${docRefId})`,
       from_name: 'AtlasBridge Master Suite',
       replyto: formData.email,
-
-      '1. Full Name': formData.fullName,
-      '1. Client Email': formData.email,
-      '1. Client Phone': formData.phone,
-      '1. Appointment Date': formData.date,
-      '1. Appointment Time': formData.time,
-      '1. Meeting Location': formData.location,
-      '1. Tax Responsibility Agreement': 'Agreed & Accepted - Client acknowledges hypothetical projections, assumes tax liabilities, and was urged to consult a CPA before pre-tax diversions',
-      '1. CMS ACA Consent': 'Granted & Authorized',
-      '1. Client Age': `${clientData.clientAge} Years Old (${clientData.clientAge >= 50 ? 'Age 50+ Catch-up Unlocked' : 'Standard Cap <50'})`,
-      '1. Tax Filing Status':
-        clientData.filingStatus.toUpperCase() + (clientData.filingStatus === 'married' ? ' (Including Spouse)' : ''),
-      '1. Tax Dependents': clientData.dependents,
-      '1. Tobacco Use': clientData.tobacco.toUpperCase(),
-
-      '2. Selected Strategy': activePath.label,
-      '2. Target Tax Year': clientData.taxYear,
-      '2. Active Carrier Selection': clientData.selectedHealthCarrier,
-      '2. Pre-Existing Conditions': clientData.preExisting.toUpperCase(),
-      '2. ACA Window Status': clientData.acaWindow,
-
-      '3. Projected AGI': `$${clientData.grossAGI.toLocaleString()}/yr ${clientData.filingStatus === 'married' ? '(Including Spouse)' : ''}`,
-      '3. FPL Percentage': `~${clientData.fplPct}% FPL`,
-      '3. Liquid Savings & Reserves': `$${clientData.liquidSavings.toLocaleString()}`,
-      '3. Existing IRA':
-        clientData.hasTraditionalIraAnnuity || clientData.annuityType === 'yes'
-          ? 'Yes (Active Traditional IRA)'
-          : 'No existing IRA',
-      '3. Appx. IRA Annual Contributions':
-        clientData.hasTraditionalIraAnnuity || clientData.annuityType === 'yes'
-          ? `$${clientData.annuityAnnualContribution.toLocaleString()}/yr`
-          : '$0',
-      '3. Appx. Retirement Annual Contribution': clientData.active401k
-        ? `$${clientData.dormantRetirement.toLocaleString()}/yr ${clientData.filingStatus === 'married' ? '(Including Spouse)' : ''}`
-        : '$0',
-      '3. Policy Gross Cash Value / Basis': `$${clientData.policyGrossValue.toLocaleString()}`,
-
-      '4. Statutory IRS IRA Diversion Cap': `$${currentIRSLimit.toLocaleString()}/yr (${clientData.filingStatus === 'married' ? 'Married Joint Cap' : 'Single Filer Cap'}${clientData.clientAge >= 50 ? ', Includes Catch-up' : ''})`,
-      '4. Statutory Retirement Plan Cap': `$${getRetirementPlanLimitForAge(clientData.clientAge, clientData.filingStatus).toLocaleString()}/yr (${clientData.clientAge >= 50 ? 'Includes +$7,500 Age 50+ Catch-up' : 'Standard Cap <50'})`,
-      '4. IRS Tax Relief Estimated': `+$${taxRelief.toLocaleString()}/yr (${Math.round(marginalTaxRate * 100)}% Bracket)`,
-      '4. Section 7702 & 1035 Status': 'Tax-Deferred Growth / Direct Non-Taxable Transfer Approved',
-      '4. Statutory Compliance Items': 'Form 1040 Sched 1 (Part II), Form 8962 APTC Reconciliation, Form 1099-R Code 6 Verification',
-
-      'Document Reference ID': `AB-CONF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      'Dispatched Timestamp': new Date().toLocaleString(),
+      name: formData.fullName,
+      email: formData.email,
+      Strategy: strategyLabel,
+      Reference_ID: docRefId,
+      message: formattedMessage,
     };
 
     try {
@@ -326,9 +357,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
-                required
                 checked={formData.cmsConsent}
-                onChange={(e) => setFormData({ ...formData, cmsConsent: e.target.checked })}
+                onChange={(e) => {
+                  setFormData({ ...formData, cmsConsent: e.target.checked });
+                  if (e.target.checked) setFormError('');
+                }}
                 className="mt-0.5 rounded border-navy-700 bg-navy-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-navy-950 cursor-pointer"
               />
               <span className="text-[11px] text-slate-300 leading-snug">
@@ -338,6 +371,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               </span>
             </label>
           </div>
+
+          {formError && (
+            <div className="bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-2">
+              <i className="fa-solid fa-circle-exclamation text-rose-400"></i>
+              <span>{formError}</span>
+            </div>
+          )}
 
           <div className="pt-2">
             <button

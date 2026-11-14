@@ -1,16 +1,18 @@
-import React, { useState } from 'react';
-import { ClientData } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { SoundFX } from '../../utils/audio';
 
 interface RolloversDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
   clientData,
   onChangeClientData,
+  onUpdateStrategySnapshot,
 }) => {
   const [rolloverCapital, setRolloverCapital] = useState<number>(
     Math.max(20000, clientData.dormantRetirement || 75000)
@@ -23,6 +25,34 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
   const newStartingBalance = rolloverCapital + upfrontBonus;
   const annualFeeSaved = Math.round(rolloverCapital * (currentFeeRate / 100));
   const tenYearFeeSaved = Math.round(annualFeeSaved * 10 * 1.25);
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    onUpdateStrategySnapshot({
+      pathId: 'rollovers',
+      pathLabel: 'Rollovers & 1035 Exchanges',
+      summaryHeadline: `Direct IRC 402(c) rollover of $${rolloverCapital.toLocaleString()} eliminating ${currentFeeRate}% fee drag`,
+      selectedTierOrOption: `IRC 402(c) / 1035 Direct Transfer (+${bonusRate}% Bonus)`,
+      sliders: [
+        { label: 'Dormant Plan Capital to Roll Over', value: `$${rolloverCapital.toLocaleString()}` },
+        { label: 'Current Custodian / Fund Fee Drag', value: `${currentFeeRate}%/yr` },
+      ],
+      impactMetrics: [
+        { label: 'Direct Transfer Capital', value: `$${rolloverCapital.toLocaleString()} ($0 tax withholding)` },
+        { label: `Instant Upfront Bonus (+${bonusRate}%)`, value: `+$${upfrontBonus.toLocaleString()}` },
+        { label: 'New Protected Starting Base', value: `$${newStartingBalance.toLocaleString()}` },
+        { label: '10-Yr Fee Waste Eliminated', value: `+$${tenYearFeeSaved.toLocaleString()}` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    rolloverCapital,
+    currentFeeRate,
+    bonusRate,
+    upfrontBonus,
+    newStartingBalance,
+    tenYearFeeSaved,
+  ]);
 
   return (
     <div className="space-y-8">

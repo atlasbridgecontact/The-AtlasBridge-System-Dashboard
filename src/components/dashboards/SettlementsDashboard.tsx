@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
-import { ClientData } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { SoundFX } from '../../utils/audio';
 
 interface SettlementsDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const SettlementsDashboard: React.FC<SettlementsDashboardProps> = ({
   clientData,
+  onUpdateStrategySnapshot,
 }) => {
   const [faceValue, setFaceValue] = useState<number>(500000);
   const [cashSurrenderVal, setCashSurrenderVal] = useState<number>(35000);
@@ -18,6 +20,32 @@ export const SettlementsDashboard: React.FC<SettlementsDashboardProps> = ({
   const settlementPct = clientData.clientAge >= 70 ? 0.28 : clientData.clientAge >= 65 ? 0.22 : 0.16;
   const estSettlementPayout = Math.round(faceValue * settlementPct);
   const netSurplusOverSurrender = Math.max(0, estSettlementPayout - cashSurrenderVal);
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    onUpdateStrategySnapshot({
+      pathId: 'settlements',
+      pathLabel: 'Life Settlements',
+      summaryHeadline: `Estimated $${estSettlementPayout.toLocaleString()} secondary-market buyout on $${faceValue.toLocaleString()} face value`,
+      selectedTierOrOption: `Secondary Market Buyout (${Math.round(settlementPct * 100)}% valuation ratio)`,
+      sliders: [
+        { label: 'Policy Death Benefit / Face Value', value: `$${faceValue.toLocaleString()}` },
+        { label: 'Carrier Cash Surrender Value', value: `$${cashSurrenderVal.toLocaleString()}` },
+      ],
+      impactMetrics: [
+        { label: 'Est. Secondary Market Payout', value: `$${estSettlementPayout.toLocaleString()}` },
+        { label: 'Additional Cash Over Carrier Surrender', value: `+$${netSurplusOverSurrender.toLocaleString()}` },
+        { label: 'Paid-Up Retained Death Benefit Alt.', value: `$${Math.round(faceValue * 0.4).toLocaleString()} ($0 future premiums)` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    faceValue,
+    cashSurrenderVal,
+    settlementPct,
+    estSettlementPayout,
+    netSurplusOverSurrender,
+  ]);
 
   return (
     <div className="space-y-8">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { ClientData, LifeCarrier, LifeTabType } from '../../types';
+import { ActiveStrategySnapshot, ClientData, LifeCarrier, LifeTabType } from '../../types';
 import { CARRIER_STAT_PROFILES } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
 
@@ -10,10 +10,12 @@ interface LifeInsuranceDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
   clientData,
+  onUpdateStrategySnapshot,
 }) => {
   const [activeTab, setActiveTab] = useState<LifeTabType>('term');
   const [selectedCarrier, setSelectedCarrier] = useState<LifeCarrier>('Mutual of Omaha');
@@ -94,6 +96,57 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
     });
     setRiderBudget(Math.min(35, count));
   };
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    const activeRiderKeys = Object.entries(riders)
+      .filter(([, checked]) => checked)
+      .map(([k]) => k)
+      .join(', ');
+    const sliders: Array<{ label: string; value: string }> = [
+      { label: 'Coverage Category Tab', value: activeTab.toUpperCase() },
+      { label: 'Preferred Life Carrier', value: selectedCarrier },
+      { label: 'Policy Structure / Subtype', value: subPolicyType },
+      { label: 'Desired Death Benefit (Slider)', value: `$${deathBenefit.toLocaleString()}` },
+      { label: 'Rider Protection Intensity', value: `+${Math.round(riderBudget)}% (${activeRiderKeys || 'Standard Living Benefits'})` },
+    ];
+    if (activeTab === 'universal') {
+      sliders.push({ label: 'Index Crediting Strategy', value: selectedCrediting });
+    }
+    if (activeTab !== 'term') {
+      sliders.push({ label: 'Projection Time Horizon', value: `${timeHorizon} Years` });
+    }
+
+    onUpdateStrategySnapshot({
+      pathId: 'life',
+      pathLabel: 'Life Insurance Strategy',
+      summaryHeadline: `$${deathBenefit.toLocaleString()} ${activeTab.toUpperCase()} coverage via ${selectedCarrier}`,
+      selectedCarrierOrVendor: selectedCarrier,
+      selectedTierOrOption: `${activeTab.toUpperCase()} (${subPolicyType})`,
+      sliders,
+      impactMetrics: [
+        { label: 'Estimated Monthly Premium', value: `$${monthlyPrem.toLocaleString()}/mo` },
+        {
+          label: activeTab === 'term' ? 'Death Benefit Legacy' : `Est. Yr-${timeHorizon} Cash Value`,
+          value: activeTab === 'term' ? `$${deathBenefit.toLocaleString()}` : `$${estCashValue.toLocaleString()}`,
+        },
+        { label: 'Living Benefit Acceleration (80%)', value: `$${livingBenefitAmount.toLocaleString()}` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    activeTab,
+    selectedCarrier,
+    subPolicyType,
+    selectedCrediting,
+    deathBenefit,
+    timeHorizon,
+    riderBudget,
+    riders,
+    monthlyPrem,
+    estCashValue,
+    livingBenefitAmount,
+  ]);
 
   // Chart setup
   useEffect(() => {

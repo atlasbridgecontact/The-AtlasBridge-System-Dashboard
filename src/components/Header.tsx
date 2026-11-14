@@ -5,6 +5,7 @@ import { SoundFX } from '../utils/audio';
 interface HeaderProps {
   taxYear: TaxYear;
   isWizardCompleted: boolean;
+  isWizardOpen: boolean;
   onToggleQuestionnaire: () => void;
   onRestartFlow: () => void;
 }
@@ -12,6 +13,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   taxYear,
   isWizardCompleted,
+  isWizardOpen,
   onToggleQuestionnaire,
   onRestartFlow,
 }) => {
@@ -34,15 +36,22 @@ export const Header: React.FC<HeaderProps> = ({
           {isWizardCompleted && (
             <>
               <button
+                type="button"
+                aria-expanded={isWizardOpen}
                 onClick={() => {
                   SoundFX.playClick();
                   onToggleQuestionnaire();
                 }}
-                className="text-xs bg-navy-800 hover:bg-navy-700 text-purple-300 font-extrabold px-3 py-2 sm:px-3.5 sm:py-2 rounded-xl border border-purple-500/30 hover:border-purple-400 transition-all flex items-center gap-1.5 shadow-lg shadow-purple-500/10 cursor-pointer"
+                className={`text-xs font-extrabold px-3 py-2 sm:px-3.5 sm:py-2 rounded-xl border transition-all flex items-center gap-1.5 shadow-lg cursor-pointer whitespace-nowrap shrink-0 ${
+                  isWizardOpen
+                    ? 'bg-purple-600/25 text-purple-200 border-purple-400 shadow-purple-500/25'
+                    : 'bg-navy-800 hover:bg-navy-700 text-purple-300 border-purple-500/30 hover:border-purple-400 shadow-purple-500/10'
+                }`}
               >
                 <i className="fa-solid fa-user-pen text-purple-400"></i>
                 <span className="hidden sm:inline">Change Personal Info</span>
                 <span className="sm:hidden">Info</span>
+                <i className={`fa-solid fa-chevron-down text-[10px] transition-transform duration-200 ${isWizardOpen ? 'rotate-180 text-purple-200' : 'text-purple-400'}`}></i>
               </button>
 
               <button

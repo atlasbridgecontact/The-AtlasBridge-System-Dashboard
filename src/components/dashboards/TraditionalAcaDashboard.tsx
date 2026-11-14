@@ -1,5 +1,5 @@
-import React from 'react';
-import { ClientData } from '../../types';
+import React, { useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { calculateAcaDetails, getHouseholdSize } from '../../utils/calculations';
 import { REGIONAL_HEALTH_CARRIERS } from '../../utils/constants';
 
@@ -7,15 +7,48 @@ interface TraditionalAcaDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const TraditionalAcaDashboard: React.FC<TraditionalAcaDashboardProps> = ({
   clientData,
-  onChangeClientData,
+  onUpdateStrategySnapshot,
 }) => {
   const householdSize = getHouseholdSize(clientData.filingStatus, clientData.dependents);
   const aca = calculateAcaDetails(clientData.grossAGI, householdSize, clientData.clientAge);
   const carrier = REGIONAL_HEALTH_CARRIERS.find((c) => c.id === clientData.selectedHealthCarrier) || REGIONAL_HEALTH_CARRIERS[0];
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    onUpdateStrategySnapshot({
+      pathId: 'traditional_aca',
+      pathLabel: 'Traditional ACA Signup',
+      summaryHeadline: `Direct Marketplace enrollment on unadjusted $${clientData.grossAGI.toLocaleString()} AGI (${aca.fplPct}% FPL)`,
+      selectedCarrierOrVendor: carrier.name,
+      selectedTierOrOption: aca.csrLevel,
+      sliders: [
+        { label: 'Unadjusted Gross Annual AGI', value: `$${clientData.grossAGI.toLocaleString()}/yr (${aca.fplPct}% FPL)` },
+        { label: 'Selected Carrier', value: carrier.name },
+        { label: 'ZIP Code', value: clientData.zipCode || '34994' },
+      ],
+      impactMetrics: [
+        { label: 'Bronze Benchmark Est.', value: `$${Math.max(0, Math.round(aca.netMonthlyPremium * 0.55))}/mo ($7,500 ded)` },
+        { label: 'Silver Benchmark Est.', value: `$${aca.netMonthlyPremium}/mo ($${aca.deductible.toLocaleString()} ded · ${aca.csrLevel})` },
+        { label: 'Gold Comprehensive Est.', value: `$${Math.round(aca.netMonthlyPremium * 1.45 + 50)}/mo ($1,500 ded)` },
+        { label: 'Monthly Federal Subsidy (APTC)', value: `$${aca.monthlySubsidy}/mo` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    clientData.grossAGI,
+    clientData.zipCode,
+    carrier.name,
+    aca.fplPct,
+    aca.csrLevel,
+    aca.netMonthlyPremium,
+    aca.deductible,
+    aca.monthlySubsidy,
+  ]);
 
   return (
     <div className="space-y-8">

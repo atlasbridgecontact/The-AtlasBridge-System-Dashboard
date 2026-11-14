@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
+import { AnimatePresence, motion } from 'motion/react';
 import {
+  ActiveStrategySnapshot,
   BookingFormData,
   ClientData,
   PrimaryCategory,
@@ -19,6 +21,7 @@ import { StrategyHub } from './components/StrategyHub';
 import { BookingModal } from './components/BookingModal';
 import { ToastNotification } from './components/ToastNotification';
 import { AdvisoryDocModal } from './components/AdvisoryDocModal';
+import { MedicaidModal } from './components/MedicaidModal';
 
 export default function App() {
   const [showDisclaimer, setShowDisclaimer] = useState<boolean>(true);
@@ -35,6 +38,7 @@ export default function App() {
     preExisting: 'no',
     acaWindow: 'auto',
     selectedHealthCarrier: 'oscar',
+    zipCode: '34994',
     householdSize: 1,
     grossAGI: 65000,
     liquidSavings: 15000,
@@ -53,6 +57,9 @@ export default function App() {
     lifePolicyStatus: 'no',
     fpl100: 15960,
     fplPct: 407,
+    isSelfEmployed: false,
+    netSelfEmploymentProfit: 55000,
+    spouseCoveredByPlan: false,
     policyGrossValue: 0,
     policyCostBasis: 30000,
     policyLoans: 5000,
@@ -62,12 +69,42 @@ export default function App() {
 
   const [eligiblePathIds, setEligiblePathIds] = useState<StrategyPathId[]>([]);
   const [activePathId, setActivePathId] = useState<StrategyPathId>('atlasbridge');
+  const [activeStrategySnapshot, setActiveStrategySnapshot] = useState<ActiveStrategySnapshot | null>(null);
 
   // Booking & Document state
   const [isBookingOpen, setIsBookingOpen] = useState<boolean>(false);
   const [bookingResult, setBookingResult] = useState<BookingFormData | null>(null);
   const [showDocModal, setShowDocModal] = useState<boolean>(false);
   const [showToast, setShowToast] = useState<boolean>(false);
+  const [showMedicaidModal, setShowMedicaidModal] = useState<boolean>(false);
+  const [isMapsQuotaExceeded, setIsMapsQuotaExceeded] = useState<boolean>(false);
+
+  const scrollToTopInstant = () => {
+    const applyScroll = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    };
+    applyScroll();
+    window.requestAnimationFrame(applyScroll);
+  };
+
+  useEffect(() => {
+    const handleQuotaExceeded = () => setIsMapsQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+  }, []);
+
+  useEffect(() => {
+    if (!isWizardCompleted || !isWizardOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsWizardOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isWizardCompleted, isWizardOpen]);
 
   // Recalculate household and FPL on data change
   const handleClientDataUpdate = (updates: Partial<ClientData>) => {
@@ -88,103 +125,129 @@ export default function App() {
   const handleSelectPrimaryCategory = (category: PrimaryCategory) => {
     setSelectedCategory(category);
     setIsWizardOpen(true);
-    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+    scrollToTopInstant();
   };
 
   const handleEvaluateEligibility = () => {
+    const currentHouseholdSize = getHouseholdSize(clientData.filingStatus, clientData.dependents);
+    const currentFpl100 = get100PercentFPL(currentHouseholdSize);
+    const currentFplPct = Math.round((clientData.grossAGI / currentFpl100) * 100);
+
     const isHighIncome =
       (clientData.filingStatus === 'married' ? clientData.grossAGI > 200000 : clientData.grossAGI > 150000) ||
-      clientData.fplPct > 500;
+      currentFplPct > 500;
     const isOutsideWindow = isOutsideAcaEnrollmentWindow(clientData.acaWindow);
-    const hasRetirementOrIra =
-      clientData.active401k ||
+    const hasEmployerAffordable = clientData.employerGroup === 'yes_affordable';
+    const isBusinessWithEmployees = Boolean(clientData.ownsBusiness && clientData.w2Employees >= 1);
+    const hasDormantRolloverAssets =
+      clientData.dormantRetirement > 0 || (clientData.spouseDormantRetirement || 0) > 0;
+    const hasExistingAnnuityOrIraAssets = Boolean(
       clientData.hasTraditionalIraAnnuity ||
-      clientData.annuityType === 'yes' ||
-      clientData.dormantRetirement > 0 ||
-      clientData.annuityAnnualContribution > 0;
+        (clientData.annuityType && !['none', 'no', 'neither'].includes(clientData.annuityType)) ||
+        clientData.existingAnnuityCash > 0 ||
+        (clientData.spouseExistingAnnuityCash || 0) > 0
+    );
+    const selfEmployedCanReachAca = Boolean(
+      clientData.isSelfEmployed &&
+        !hasEmployerAffordable &&
+        !isOutsideWindow &&
+        clientData.grossAGI <= 260000
+    );
 
     let unlocked: StrategyPathId[] = [];
 
-    if (selectedCategory === 'unwanted_life') {
-      unlocked.push('unwanted_life', 'annuities', 'rollovers');
-    } else if (selectedCategory === 'health') {
+    if (selectedCategory === 'health') {
       if (isOutsideWindow) {
-        unlocked.push('private_health', 'traditional_aca');
-      } else {
-        if (!isHighIncome && clientData.employerGroup !== 'yes_affordable' && clientData.fplPct <= 500) {
-          unlocked.push('atlasbridge');
+        unlocked.push('private_health');
+        if (isBusinessWithEmployees) {
+          unlocked.push('group');
         }
-        if (clientData.employerGroup !== 'yes_affordable') {
+      } else if (hasEmployerAffordable) {
+        if (clientData.healthStatus !== 'high') {
+          unlocked.push('private_health');
+        }
+        if (isBusinessWithEmployees) {
+          unlocked.push('group');
+        }
+        if (unlocked.length === 0) {
           unlocked.push('traditional_aca');
         }
+      } else {
+        if (!isHighIncome && currentFplPct <= 500) {
+          unlocked.push('atlasbridge');
+        }
+        if (selfEmployedCanReachAca) {
+          unlocked.push('self_employed_aca');
+        }
+        unlocked.push('traditional_aca');
         if (clientData.healthStatus === 'healthy' || clientData.healthStatus === 'moderate' || isHighIncome) {
           unlocked.push('private_health');
         }
-      }
-      if (clientData.ownsBusiness || clientData.w2Employees >= 1) {
-        unlocked.push('group');
+        if (isBusinessWithEmployees) {
+          unlocked.push('group');
+        }
       }
     } else if (selectedCategory === 'life') {
       unlocked.push('life');
-      if (clientData.lifePolicyStatus !== 'no') {
-        unlocked.push('unwanted_life');
+      if (clientData.lifePolicyStatus === 'perm_unwanted') {
+        unlocked.push('unwanted_life', 'settlements');
       }
     } else if (selectedCategory === 'annuities') {
       unlocked.push('annuities');
-      if (clientData.lifePolicyStatus !== 'no') {
+      if (hasDormantRolloverAssets || hasExistingAnnuityOrIraAssets) {
+        unlocked.push('rollovers');
+      }
+      if (clientData.lifePolicyStatus === 'perm_unwanted') {
         unlocked.push('unwanted_life');
       }
     } else if (selectedCategory === 'rollovers') {
-      unlocked.push('rollovers');
+      unlocked.push('rollovers', 'annuities');
+      if (clientData.lifePolicyStatus === 'perm_unwanted') {
+        unlocked.push('unwanted_life');
+      }
+    } else if (selectedCategory === 'unwanted_life') {
+      unlocked.push('unwanted_life', 'annuities', 'settlements');
+      if (hasDormantRolloverAssets) {
+        unlocked.push('rollovers');
+      }
+    } else if (selectedCategory === 'settlements') {
+      unlocked.push('settlements');
       if (clientData.lifePolicyStatus !== 'no') {
         unlocked.push('unwanted_life');
       }
-    } else if (selectedCategory === 'settlements') {
-      if (clientData.lifePolicyStatus !== 'no') {
-        unlocked.push('settlements', 'unwanted_life');
-      } else {
-        unlocked.push('settlements');
-      }
-    }
-
-    // Existing retirement/IRAs: Ensure client is NEVER disqualified from The AtlasBridge System;
-    // recommend AtlasBridge System in these cases alongside rollovers/annuities
-    if (hasRetirementOrIra) {
-      if (!unlocked.includes('atlasbridge')) {
-        unlocked.unshift('atlasbridge');
-      }
-      if (!unlocked.includes('rollovers') && selectedCategory !== 'unwanted_life') {
-        unlocked.push('rollovers');
-      }
-      if (!unlocked.includes('annuities') && selectedCategory !== 'unwanted_life') {
-        unlocked.push('annuities');
-      }
-    }
-
-    if (clientData.lifePolicyStatus === 'no' && selectedCategory !== 'unwanted_life') {
-      unlocked = unlocked.filter((id) => id !== 'unwanted_life' && id !== 'settlements');
     }
 
     if (unlocked.length === 0) {
-      if (selectedCategory === 'unwanted_life') unlocked.push('unwanted_life');
-      else if (selectedCategory === 'life') unlocked.push('life');
-      else if (isOutsideWindow) unlocked.push('private_health');
-      else if (isHighIncome) unlocked.push('private_health', 'traditional_aca');
-      else unlocked.push('atlasbridge');
+      if (selectedCategory === 'health' || !selectedCategory) {
+        unlocked.push(isOutsideWindow || isHighIncome ? 'private_health' : 'atlasbridge');
+      } else {
+        unlocked.push(selectedCategory);
+      }
     }
 
-    const primaryPathId: StrategyPathId = selectedCategory === 'health' ? 'atlasbridge' : (selectedCategory || 'atlasbridge');
-    // Ensure primary path is at index 0, followed by other eligible options
-    unlocked = [primaryPathId, ...unlocked.filter((id) => id !== primaryPathId)];
-    unlocked = Array.from(new Set(unlocked));
+    let primaryPathId: StrategyPathId =
+      selectedCategory && selectedCategory !== 'health' ? selectedCategory : unlocked[0];
+    if (selectedCategory === 'health') {
+      if (isOutsideWindow || hasEmployerAffordable) {
+        primaryPathId = unlocked[0];
+      } else if (unlocked.includes('atlasbridge')) {
+        primaryPathId = 'atlasbridge';
+      } else if (unlocked.includes('self_employed_aca')) {
+        primaryPathId = 'self_employed_aca';
+      } else {
+        primaryPathId = unlocked[0];
+      }
+    }
+
+    // Ensure primary path is at index 0, followed strictly by qualified secondary paths
+    unlocked = Array.from(new Set([primaryPathId, ...unlocked.filter((id) => id !== primaryPathId)]));
 
     setEligiblePathIds(unlocked);
     setActivePathId(primaryPathId);
 
     setIsWizardCompleted(true);
     setIsWizardOpen(false);
+    setShowMedicaidModal(currentFplPct <= 138);
     SoundFX.playUnlock();
 
     // Trigger celebration confetti
@@ -198,9 +261,8 @@ export default function App() {
       // ignore
     }
 
-    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+    // Always scroll back to the top on submit and profile resubmit
+    scrollToTopInstant();
   };
 
   const handleRestart = () => {
@@ -208,9 +270,8 @@ export default function App() {
     setIsWizardOpen(false);
     setIsWizardCompleted(false);
     setEligiblePathIds([]);
-    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+    setActiveStrategySnapshot(null);
+    scrollToTopInstant();
   };
 
   const handleBookingSuccess = (formData: BookingFormData) => {
@@ -247,13 +308,67 @@ export default function App() {
       {/* Mandatory Initial Legal & Advisory Compliance Disclaimer Modal */}
       <DisclaimerModal isOpen={showDisclaimer} onAccept={() => setShowDisclaimer(false)} />
 
+      {/* Google Maps Platform Quota Exceeded Notice */}
+      {isMapsQuotaExceeded && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+          <span>
+            Google Maps Platform quota reached. If you are the app owner, visit{' '}
+            <a
+              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold text-amber-950 hover:text-amber-800"
+            >
+              maps developer site
+            </a>{' '}
+            for instructions to update your account.
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <Header
         taxYear={clientData.taxYear}
         isWizardCompleted={isWizardCompleted}
-        onToggleQuestionnaire={() => setIsWizardOpen(!isWizardOpen)}
+        isWizardOpen={isWizardOpen}
+        onToggleQuestionnaire={() => setIsWizardOpen((prev) => !prev)}
         onRestartFlow={handleRestart}
       />
+
+      {/* Slide-down Change Personal Info Drawer anchored below sticky header */}
+      <AnimatePresence>
+        {selectedCategory && isWizardCompleted && isWizardOpen && (
+          <div className="fixed inset-x-0 top-20 bottom-0 z-40 flex flex-col">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setIsWizardOpen(false)}
+              className="fixed inset-x-0 top-20 bottom-0 bg-navy-950/75 backdrop-blur-sm"
+              aria-hidden="true"
+            />
+            <motion.div
+              initial={{ y: '-100%', opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: '-100%', opacity: 0 }}
+              transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 max-h-[calc(100vh-5.25rem)] overflow-y-auto border-b border-purple-500/40 bg-navy-950/95 shadow-2xl shadow-black/60"
+            >
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-6">
+                <StepTwoQuestionnaire
+                  selectedCategory={selectedCategory}
+                  clientData={clientData}
+                  onChangeClientData={handleClientDataUpdate}
+                  onSubmit={handleEvaluateEligibility}
+                  isDrawerMode
+                  onCancelDrawer={() => setIsWizardOpen(false)}
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 sm:mt-8 space-y-8 sm:space-y-10">
         {/* STEP 1: The One Question Screen */}
@@ -261,8 +376,8 @@ export default function App() {
           <StepOneQuestion onSelectCategory={handleSelectPrimaryCategory} />
         )}
 
-        {/* STEP 2: Diagnostic Onboarding / Eligibility Questions */}
-        {selectedCategory && isWizardOpen && (
+        {/* STEP 2: Initial Onboarding View (Before Dashboard Unlock) */}
+        {selectedCategory && !isWizardCompleted && isWizardOpen && (
           <StepTwoQuestionnaire
             selectedCategory={selectedCategory}
             clientData={clientData}
@@ -279,12 +394,11 @@ export default function App() {
             activePathId={activePathId}
             onSelectPath={(pathId) => {
               setActivePathId(pathId);
-              window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-              document.documentElement.scrollTop = 0;
-              document.body.scrollTop = 0;
+              scrollToTopInstant();
             }}
             onChangeClientData={handleClientDataUpdate}
             onOpenBooking={() => setIsBookingOpen(true)}
+            onUpdateStrategySnapshot={setActiveStrategySnapshot}
           />
         )}
       </main>
@@ -294,6 +408,7 @@ export default function App() {
         isOpen={isBookingOpen}
         activePath={activePathConfig}
         clientData={clientData}
+        strategySnapshot={activeStrategySnapshot}
         onClose={() => setIsBookingOpen(false)}
         onBookingSuccess={handleBookingSuccess}
       />
@@ -305,6 +420,13 @@ export default function App() {
         activePath={activePathConfig}
         clientData={clientData}
         onClose={() => setShowDocModal(false)}
+      />
+
+      {/* Potential Medicaid Eligibility Notice Modal */}
+      <MedicaidModal
+        isOpen={showMedicaidModal}
+        clientData={clientData}
+        onClose={() => setShowMedicaidModal(false)}
       />
     </div>
   );

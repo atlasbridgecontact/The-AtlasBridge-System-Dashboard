@@ -131,23 +131,24 @@ export const AdvisoryDocModal: React.FC<AdvisoryDocModalProps> = ({
                 <strong className="text-emerald-400 text-sm">~{clientData.fplPct}% FPL</strong>
               </div>
             </div>
-            {(clientData.hasTraditionalIraAnnuity || clientData.annuityType === 'yes') && (
+            {(clientData.hasTraditionalIraAnnuity ||
+              (clientData.annuityType && !['none', 'no', 'neither'].includes(clientData.annuityType))) && (
               <div className="bg-gold-500/10 border border-gold-500/30 p-2.5 rounded-lg flex items-center justify-between text-xs text-gold-300">
                 <span>
                   <i className="fa-solid fa-vault mr-1.5 text-gold-400"></i> Active Traditional IRA:
                 </span>
                 <span className="font-bold text-white">
-                  ${clientData.annuityAnnualContribution.toLocaleString()} / yr Appx. Contribution
+                  ${(((clientData.existingAnnuityCash || 0) + (clientData.spouseExistingAnnuityCash || 0)) || clientData.annuityAnnualContribution || 0).toLocaleString()} / yr Appx. Contribution
                 </span>
               </div>
             )}
-            {clientData.active401k && (
+            {(clientData.active401k && clientData.active401k !== 'neither') && (
               <div className="bg-blue-500/10 border border-blue-500/30 p-2.5 rounded-lg flex items-center justify-between text-xs text-blue-300">
                 <span>
                   <i className="fa-solid fa-building-columns mr-1.5 text-blue-400"></i> Active Employer 401(k) / 403(b){clientData.filingStatus === 'married' ? ' (Joint / Spouse)' : ''}:
                 </span>
                 <span className="font-bold text-white">
-                  ${clientData.dormantRetirement.toLocaleString()} / yr Appx. Contribution {clientData.clientAge >= 50 ? '(Includes 50+ Catch-up)' : ''}
+                  ${((clientData.dormantRetirement || 0) + (clientData.spouseDormantRetirement || 0)).toLocaleString()} / yr Appx. Allocation
                 </span>
               </div>
             )}

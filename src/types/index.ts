@@ -24,6 +24,7 @@ export type LifeTabType = 'term' | 'whole' | 'universal' | 'other';
 
 export type StrategyPathId =
   | 'atlasbridge'
+  | 'self_employed_aca'
   | 'unwanted_life'
   | 'annuities'
   | 'rollovers'
@@ -42,10 +43,14 @@ export interface ClientData {
   preExisting: 'no' | 'yes';
   acaWindow: AcaWindowOption;
   selectedHealthCarrier: HealthCarrierId;
+  zipCode: string;
   householdSize: number;
   grossAGI: number;
   liquidSavings: number;
   healthStatus: HealthStatus;
+  isSelfEmployed?: boolean;
+  netSelfEmploymentProfit?: number;
+  spouseCoveredByPlan?: boolean;
   ownsBusiness: boolean;
   w2Employees: number;
   employerGroup: 'no' | 'yes_affordable' | 'yes_unaffordable';
@@ -82,6 +87,9 @@ export interface HealthCarrierInfo {
   name: string;
   category: string;
   note: string;
+  directoryUrl: string;
+  networkSearchHint: string;
+  carrierQueries?: string[];
 }
 
 export interface StrategyPathConfig {
@@ -91,6 +99,16 @@ export interface StrategyPathConfig {
   icon: string;
   color: 'blue' | 'emerald' | 'gold' | 'cyan' | 'purple' | 'red' | 'indigo' | 'silver';
   desc: string;
+}
+
+export interface ActiveStrategySnapshot {
+  pathId: StrategyPathId;
+  pathLabel: string;
+  summaryHeadline: string;
+  selectedCarrierOrVendor?: string;
+  selectedTierOrOption?: string;
+  sliders: Array<{ label: string; value: string }>;
+  impactMetrics: Array<{ label: string; value: string }>;
 }
 
 export interface BookingFormData {

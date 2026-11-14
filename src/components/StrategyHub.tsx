@@ -1,10 +1,11 @@
 import React from 'react';
-import { ClientData, StrategyPathConfig, StrategyPathId } from '../types';
+import { ActiveStrategySnapshot, ClientData, StrategyPathId } from '../types';
 import { ALL_PATHS, COLOR_HEX_MAP } from '../utils/constants';
 import { isOutsideAcaEnrollmentWindow } from '../utils/calculations';
 import { SoundFX } from '../utils/audio';
 
 import { AtlasBridgeDashboard } from './dashboards/AtlasBridgeDashboard';
+import { SelfEmployedAcaDashboard } from './dashboards/SelfEmployedAcaDashboard';
 import { UnwantedLifeDashboard } from './dashboards/UnwantedLifeDashboard';
 import { LifeInsuranceDashboard } from './dashboards/LifeInsuranceDashboard';
 import { AnnuitiesDashboard } from './dashboards/AnnuitiesDashboard';
@@ -21,6 +22,7 @@ interface StrategyHubProps {
   onSelectPath: (pathId: StrategyPathId) => void;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const StrategyHub: React.FC<StrategyHubProps> = ({
@@ -30,11 +32,15 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
   onSelectPath,
   onChangeClientData,
   onOpenBooking,
+  onUpdateStrategySnapshot,
 }) => {
   const isOutsideWindow = isOutsideAcaEnrollmentWindow(clientData.acaWindow);
   const isHighIncome =
     (clientData.filingStatus === 'married' ? clientData.grossAGI > 200000 : clientData.grossAGI > 150000) ||
     clientData.fplPct > 500;
+  const hasHealthPaths = eligiblePathIds.some((id) =>
+    ['atlasbridge', 'self_employed_aca', 'traditional_aca', 'private_health'].includes(id)
+  );
 
   const availablePaths = ALL_PATHS.filter((p) => eligiblePathIds.includes(p.id)).sort((a, b) => {
     if (a.id === activePathId) return -1;
@@ -47,7 +53,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
   return (
     <div className="space-y-8">
       {/* Outside ACA Window Notice */}
-      {isOutsideWindow && (
+      {isOutsideWindow && hasHealthPaths && (
         <div className="glass-card p-5 sm:p-6 border-l-4 border-l-rose-500 glow-red space-y-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-navy-950 border border-rose-500/40 flex items-center justify-center text-rose-400 text-xl shrink-0">
@@ -66,7 +72,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
       )}
 
       {/* High Income Ineligibility Notice */}
-      {isHighIncome && !isOutsideWindow && (
+      {isHighIncome && !isOutsideWindow && hasHealthPaths && !eligiblePathIds.includes('atlasbridge') && (
         <div className="glass-card p-5 sm:p-6 border-l-4 border-l-amber-500 glow-gold space-y-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-navy-950 border border-amber-500/40 flex items-center justify-center text-amber-400 text-xl shrink-0">
@@ -75,7 +81,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             <div>
               <h4 className="text-base font-extrabold text-white">Income Eligibility Notice: High-Income Carrier Route</h4>
               <p className="text-xs text-slate-300">
-                Your reported gross income (<strong>${clientData.grossAGI.toLocaleString()}</strong>, ~{clientData.fplPct}% FPL) exceeds the threshold where pre-tax MAGI reduction unlocks ACA Premium Tax Credits (APTC). Consequently, the Atlasbridge System health module has been bypassed, and you have been unlocked directly for <strong>Private PPO Health Plans</strong> and <strong>Traditional ACA Signup</strong>.
+                Your reported gross income (<strong>${clientData.grossAGI.toLocaleString()}</strong>, ~{clientData.fplPct}% FPL) exceeds the threshold where standard individual pre-tax IRA diversion unlocks ACA Premium Tax Credits (APTC). You have been directed to the best-fit high-income health options below.
               </p>
             </div>
           </div>
@@ -153,6 +159,15 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
+          />
+        )}
+        {activePathId === 'self_employed_aca' && (
+          <SelfEmployedAcaDashboard
+            clientData={clientData}
+            onChangeClientData={onChangeClientData}
+            onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'unwanted_life' && (
@@ -160,6 +175,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'life' && (
@@ -167,6 +183,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'annuities' && (
@@ -174,6 +191,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'rollovers' && (
@@ -181,6 +199,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'traditional_aca' && (
@@ -188,6 +207,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'private_health' && (
@@ -195,6 +215,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'group' && (
@@ -202,6 +223,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
         {activePathId === 'settlements' && (
@@ -209,6 +231,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             clientData={clientData}
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
+            onUpdateStrategySnapshot={onUpdateStrategySnapshot}
           />
         )}
 

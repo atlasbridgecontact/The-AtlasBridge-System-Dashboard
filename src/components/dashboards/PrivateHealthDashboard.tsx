@@ -1,17 +1,38 @@
-import React from 'react';
-import { ClientData } from '../../types';
+import React, { useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 
 interface PrivateHealthDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const PrivateHealthDashboard: React.FC<PrivateHealthDashboardProps> = ({
   clientData,
+  onUpdateStrategySnapshot,
 }) => {
   const ageFactor = Math.pow(1.03, Math.max(0, clientData.clientAge - 25));
   const basePrem = Math.round(285 * ageFactor);
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    onUpdateStrategySnapshot({
+      pathId: 'private_health',
+      pathLabel: 'Private Health Plans',
+      summaryHeadline: `Year-round medically underwritten Nationwide PPO starting at $${Math.round(basePrem * 0.82)}–$${basePrem}/mo`,
+      selectedTierOrOption: 'Med-Guard Preferred PPO / Choice Value PPO',
+      sliders: [
+        { label: 'Self-Reported Health Underwriting Tier', value: clientData.healthStatus.toUpperCase() },
+        { label: 'Client Age', value: `${clientData.clientAge} Years Old` },
+        { label: 'Enrollment Window Status', value: clientData.acaWindow },
+      ],
+      impactMetrics: [
+        { label: 'Med-Guard Preferred PPO Est.', value: `$${basePrem}/mo ($2,500 ded | $5,000 Max OOP)` },
+        { label: 'Choice Value PPO Est.', value: `$${Math.round(basePrem * 0.82)}/mo ($5,000 ded | $7,500 Max OOP)` },
+      ],
+    });
+  }, [onUpdateStrategySnapshot, basePrem, clientData.healthStatus, clientData.clientAge, clientData.acaWindow]);
 
   return (
     <div className="space-y-8">

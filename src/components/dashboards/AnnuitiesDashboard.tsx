@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { ClientData } from '../../types';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { SoundFX } from '../../utils/audio';
 
 Chart.register(...registerables);
@@ -9,11 +9,12 @@ interface AnnuitiesDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
   clientData,
-  onChangeClientData,
+  onUpdateStrategySnapshot,
 }) => {
   const [fundingSource, setFundingSource] = useState<'qualified' | 'non_qualified'>('qualified');
   const [annuityCategory, setAnnuityCategory] = useState<'fia' | 'myga' | 'spia' | 'fpa'>('fia');
@@ -46,6 +47,49 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    const categoryLabel =
+      annuityCategory === 'fia'
+        ? 'Fixed Indexed Annuity (FIA)'
+        : annuityCategory === 'myga'
+        ? 'MYGA (5.65% Fixed Rate)'
+        : annuityCategory === 'spia'
+        ? 'Immediate Annuity (SPIA)'
+        : 'Flexible Premium Annuity (FPA)';
+
+    onUpdateStrategySnapshot({
+      pathId: 'annuities',
+      pathLabel: 'Annuities & Guaranteed Income',
+      summaryHeadline: `${fundingSource === 'qualified' ? 'Qualified Pre-Tax' : 'Non-Qualified / 1035'} ${categoryLabel} on $${principalDeposit.toLocaleString()} principal`,
+      selectedTierOrOption: `${categoryLabel} (${fundingSource === 'qualified' ? 'Qualified' : 'Non-Qualified'})`,
+      sliders: [
+        { label: 'Funding Source', value: fundingSource === 'qualified' ? 'Qualified (Pre-Tax IRA/401k)' : 'Non-Qualified (After-Tax / 1035)' },
+        { label: 'Annuity Product Category', value: categoryLabel },
+        { label: 'Initial Rollover / Principal Deposit', value: `$${principalDeposit.toLocaleString()}` },
+        { label: 'Growth Deferral Period', value: deferralYears === 0 ? `Immediate Payout (Age ${incomeAge})` : `${deferralYears} Years (Age ${incomeAge})` },
+      ],
+      impactMetrics: [
+        { label: 'Starting Account Base', value: `$${Math.round(startingBase).toLocaleString()} (${bonusCapital > 0 ? '+8% FIA bonus' : '100% principal'})` },
+        { label: `Projected Future Value (Yr ${deferralYears})`, value: `$${estFutureValue.toLocaleString()}` },
+        { label: 'Monthly Guaranteed Lifelong Payout', value: `$${monthlyGuaranteedIncome.toLocaleString()}/mo` },
+        { label: 'Annual Guaranteed Lifelong Income', value: `$${annualGuaranteedIncome.toLocaleString()}/yr` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    fundingSource,
+    annuityCategory,
+    principalDeposit,
+    deferralYears,
+    incomeAge,
+    startingBase,
+    bonusCapital,
+    estFutureValue,
+    monthlyGuaranteedIncome,
+    annualGuaranteedIncome,
+  ]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -236,7 +280,13 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
               key={prod.id}
               onClick={() => {
                 SoundFX.playClick();
-                setAnnuityCategory(prod.id as typeof annuityCategory);
+                const nextCat = prod.id as typeof annuityCategory;
+                setAnnuityCategory(nextCat);
+                if (nextCat === 'spia') {
+                  setDeferralYears(0);
+                } else if (deferralYears === 0) {
+                  setDeferralYears(5);
+                }
               }}
               className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
                 annuityCategory === prod.id
@@ -296,16 +346,19 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
             <div className="space-y-2">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-300 font-semibold">Growth Deferral Period:</span>
-                <span className="text-gold-400 font-extrabold text-xs">{deferralYears} Years (Age {incomeAge})</span>
+                <span className="text-gold-400 font-extrabold text-xs">
+                  {deferralYears === 0 ? `Immediate Payout (Age ${incomeAge})` : `${deferralYears} Years (Age ${incomeAge})`}
+                </span>
               </div>
               <input
                 type="range"
-                min="1"
+                min={annuityCategory === 'spia' ? 0 : 1}
                 max="15"
                 step="1"
                 value={deferralYears}
                 onChange={(e) => {
-                  const val = parseInt(e.target.value) || 1;
+                  const rawVal = parseInt(e.target.value, 10);
+                  const val = Number.isNaN(rawVal) ? (annuityCategory === 'spia' ? 0 : 1) : rawVal;
                   SoundFX.playSlideHum(val / 15);
                   setDeferralYears(val);
                 }}

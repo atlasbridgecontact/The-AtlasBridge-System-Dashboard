@@ -1,17 +1,18 @@
-import React, { useState } from 'react';
-import { ClientData } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { ActiveStrategySnapshot, ClientData } from '../../types';
 import { SoundFX } from '../../utils/audio';
 
 interface UnwantedLifeDashboardProps {
   clientData: ClientData;
   onChangeClientData: (updates: Partial<ClientData>) => void;
   onOpenBooking: () => void;
+  onUpdateStrategySnapshot?: (snapshot: ActiveStrategySnapshot) => void;
 }
 
 export const UnwantedLifeDashboard: React.FC<UnwantedLifeDashboardProps> = ({
   clientData,
   onChangeClientData,
-  onOpenBooking,
+  onUpdateStrategySnapshot,
 }) => {
   const [taxBracket, setTaxBracket] = useState<number>(22);
 
@@ -26,6 +27,43 @@ export const UnwantedLifeDashboard: React.FC<UnwantedLifeDashboardProps> = ({
   const taxDue = Math.round(taxableGain * (taxBracket / 100));
   const transfer1035Value = Math.max(0, grossVal - loans - fees);
   const annualRelief = monthlyPrem * 12;
+
+  useEffect(() => {
+    if (!onUpdateStrategySnapshot) return;
+    onUpdateStrategySnapshot({
+      pathId: 'unwanted_life',
+      pathLabel: 'Unwanted Life Policy Audit',
+      summaryHeadline: `IRC 1035 Exchange of $${transfer1035Value.toLocaleString()} eliminating $${annualRelief.toLocaleString()}/yr premium burden`,
+      selectedTierOrOption: 'Direct 1035 Non-Qualified Annuity Exchange',
+      sliders: [
+        { label: 'Policy Gross Cash Value', value: `$${grossVal.toLocaleString()}` },
+        { label: 'Cost Basis (Total Premiums Paid)', value: `$${basis.toLocaleString()}` },
+        { label: 'Outstanding Policy Loans', value: `$${loans.toLocaleString()}` },
+        { label: 'Surrender Charges / Exit Fees', value: `$${fees.toLocaleString()}` },
+        { label: 'Current Monthly Premium Obligation', value: `$${monthlyPrem.toLocaleString()}/mo` },
+        { label: 'Assumed Federal Tax Bracket', value: `${taxBracket}%` },
+      ],
+      impactMetrics: [
+        { label: 'Net Surrender Cash Value', value: `$${Math.round(netSurrender).toLocaleString()}` },
+        { label: 'Taxable Gain Avoided via 1035', value: `$${Math.round(taxableGain).toLocaleString()} (saves $${taxDue.toLocaleString()} tax)` },
+        { label: '1035 Annuity Transfer Value', value: `$${Math.round(transfer1035Value).toLocaleString()} ($0 immediate tax)` },
+        { label: 'Annual Out-of-Pocket Premium Eliminated', value: `+$${Math.round(annualRelief).toLocaleString()}/yr` },
+      ],
+    });
+  }, [
+    onUpdateStrategySnapshot,
+    grossVal,
+    basis,
+    loans,
+    fees,
+    monthlyPrem,
+    taxBracket,
+    netSurrender,
+    taxableGain,
+    taxDue,
+    transfer1035Value,
+    annualRelief,
+  ]);
 
   const exportReportText = () => {
     SoundFX.playClick();
