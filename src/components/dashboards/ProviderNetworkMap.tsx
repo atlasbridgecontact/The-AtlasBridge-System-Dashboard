@@ -11,15 +11,16 @@ import {
   useApiLoadingStatus,
   APILoadingStatus,
 } from '@vis.gl/react-google-maps';
-import { HealthCarrierId, HealthCarrierInfo } from '../../types';
+import { CarrierNetworkInfo, HealthCarrierId } from '../../types';
 import { REGIONAL_HEALTH_CARRIERS } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
 
-interface ProviderNetworkMapProps {
+interface ProviderNetworkMapProps<T extends string = HealthCarrierId> {
   zipCode: string;
   onChangeZipCode: (zip: string) => void;
-  carrier: HealthCarrierInfo;
-  onChangeCarrier: (carrierId: HealthCarrierId) => void;
+  carrier: CarrierNetworkInfo<T>;
+  carriers?: CarrierNetworkInfo<T>[];
+  onChangeCarrier: (carrierId: T) => void;
   selectedTier: string;
   displayPlanName: string;
 }
@@ -76,7 +77,7 @@ function isQuotaError(err: unknown): boolean {
   );
 }
 
-function matchesCarrierBranding(placeName: string, carrierId: HealthCarrierId): boolean {
+function matchesCarrierBranding(placeName: string, carrierId: string): boolean {
   const lower = placeName.toLowerCase();
   if (carrierId === 'molina') {
     return lower.includes('molina') || lower.includes('community health') || lower.includes('clinic') || lower.includes('medical center');
@@ -87,14 +88,23 @@ function matchesCarrierBranding(placeName: string, carrierId: HealthCarrierId): 
   if (carrierId === 'fhcp') {
     return lower.includes('florida health care') || lower.includes('fhcp');
   }
-  if (carrierId === 'uhc') {
-    return lower.includes('unitedhealthcare') || lower.includes('optum');
+  if (carrierId === 'uhc' || carrierId === 'uhc_ppo') {
+    return lower.includes('unitedhealthcare') || lower.includes('optum') || lower.includes('uhc');
   }
   if (carrierId === 'oscar') {
     return lower.includes('oscar') || lower.includes('cleveland clinic');
   }
   if (carrierId === 'ambetter') {
     return lower.includes('ambetter') || lower.includes('sunshine') || lower.includes('community health');
+  }
+  if (carrierId === 'cigna_ppo') {
+    return lower.includes('cigna') || lower.includes('cleveland clinic') || lower.includes('hca') || lower.includes('medical center');
+  }
+  if (carrierId === 'multiplan_ppo') {
+    return lower.includes('multiplan') || lower.includes('phcs') || lower.includes('medical center') || lower.includes('clinic');
+  }
+  if (carrierId === 'aetna_ppo') {
+    return lower.includes('aetna') || lower.includes('minuteclinic') || lower.includes('cvs') || lower.includes('medical center');
   }
   return false;
 }
@@ -184,7 +194,7 @@ const ProviderMarker: React.FC<ProviderMarkerProps> = ({
 
 interface InnerProviderMapProps {
   activeZip: string;
-  carrier: HealthCarrierInfo;
+  carrier: CarrierNetworkInfo<string>;
   selectedTier: string;
   displayPlanName: string;
   facilityCategory: FacilityCategory;
@@ -467,7 +477,7 @@ const InnerProviderMap: React.FC<InnerProviderMapProps> = ({
       if (searchScope === 'carrier_aligned' && finalProviders.length > 0) {
         const affiliatedCount = finalProviders.filter((p) => p.carrierAffiliated).length;
         if (affiliatedCount === 0 && !routeMatrixNotice) {
-          routeMatrixNotice = `Showing ${finalProviders.length} care facilities within a ${MAX_DRIVE_MINUTES}-min drive of ${activeZip}. Confirm exact ${carrier.name} HIOS plan acceptance in their directory.`;
+          routeMatrixNotice = `Showing ${finalProviders.length} care facilities within a ${MAX_DRIVE_MINUTES}-min drive of ${activeZip}. Confirm exact ${carrier.name} plan acceptance in their directory.`;
         }
       }
 
@@ -576,14 +586,19 @@ const InnerProviderMap: React.FC<InnerProviderMapProps> = ({
   );
 };
 
-export const ProviderNetworkMap: React.FC<ProviderNetworkMapProps> = ({
+export function ProviderNetworkMap<T extends string = HealthCarrierId>({
   zipCode,
   onChangeZipCode,
   carrier,
+  carriers,
   onChangeCarrier,
   selectedTier,
   displayPlanName,
-}) => {
+}: ProviderNetworkMapProps<T>): React.ReactElement {
+  const carrierOptions = useMemo(
+    () => carriers ?? (REGIONAL_HEALTH_CARRIERS as unknown as CarrierNetworkInfo<T>[]),
+    [carriers]
+  );
   const apiKey = useMemo(() => resolveMapsApiKey(), []);
   const [zipDraft, setZipDraft] = useState<string>(zipCode || '34994');
   const [activeZip, setActiveZip] = useState<string>(/^\d{5}$/.test(zipCode) ? zipCode : '34994');
@@ -656,11 +671,11 @@ export const ProviderNetworkMap: React.FC<ProviderNetworkMapProps> = ({
                 value={carrier.id}
                 onChange={(e) => {
                   SoundFX.playClick();
-                  onChangeCarrier(e.target.value as HealthCarrierId);
+                  onChangeCarrier(e.target.value as T);
                 }}
                 className="bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer max-w-[175px] sm:max-w-[215px]"
               >
-                {REGIONAL_HEALTH_CARRIERS.map((c) => (
+                {carrierOptions.map((c) => (
                   <option key={c.id} value={c.id} className="bg-navy-900 text-white">
                     {c.name}
                   </option>
@@ -758,7 +773,7 @@ export const ProviderNetworkMap: React.FC<ProviderNetworkMapProps> = ({
           <strong className="text-blue-400">{carrier.name}</strong> ({tierLabel}).
         </span>
         <span className="text-slate-400 shrink-0">
-          Confirm exact HIOS plan-ID acceptance via carrier directory before enrolling.
+          Confirm exact plan &amp; network acceptance via carrier directory before enrolling.
         </span>
       </div>
 

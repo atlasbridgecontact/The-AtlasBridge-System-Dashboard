@@ -454,9 +454,14 @@ export const TraditionalAcaDashboard: React.FC<TraditionalAcaDashboardProps> = (
                   <div className="bg-purple-500/10 border border-purple-500/40 rounded-lg p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <div className="text-[11px] text-purple-200 leading-snug">
                       <strong className="text-purple-300 block">
-                        <i className="fa-solid fa-user-shield mr-1"></i> Limited ACA Benefits Detected ({baseAca.exactFplPct > 250 ? '>250% FPL — No CSR' : '$0 APTC'})
+                        <i className="fa-solid fa-user-shield mr-1"></i>{' '}
+                        {baseAca.monthlySubsidy > 0
+                          ? `No Silver CSR (>250% FPL) — +$${baseAca.monthlySubsidy.toLocaleString()}/mo APTC Active`
+                          : 'Limited ACA Benefits Detected ($0 APTC)'}
                       </strong>
-                      Preview medically underwritten Private PPO options calibrated to your profile.
+                      {baseAca.monthlySubsidy > 0
+                        ? 'CSR deductible help ends above 250% FPL (Standard 70% Silver applies), while federal APTC subsidies stay active up to 400% FPL. Compare Private PPO plans side-by-side.'
+                        : `Household is ${baseAca.isBelow100Fpl ? 'below the 100% FPL minimum' : 'above the 400% FPL cliff'} ($0 APTC). Preview medically underwritten Private PPO options calibrated to your profile.`}
                     </div>
                     <button
                       type="button"

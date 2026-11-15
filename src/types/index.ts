@@ -19,6 +19,8 @@ export type LifeCarrier =
   | 'Principal';
 
 export type HealthCarrierId = 'oscar' | 'fl_blue' | 'ambetter' | 'fhcp' | 'molina' | 'uhc';
+export type PrivateHealthCarrierId = 'cigna_ppo' | 'uhc_ppo' | 'multiplan_ppo' | 'aetna_ppo';
+export type PrivatePpoTierId = 'preferred' | 'choice' | 'executive';
 
 export type LifeTabType = 'term' | 'whole' | 'universal' | 'other';
 
@@ -59,6 +61,10 @@ export interface LifeRiderDefinition {
 
 export type AcaMetalTier = 'bronze' | 'silver' | 'gold';
 export type UtilizationScenarioId = 'low' | 'moderate' | 'catastrophic';
+
+export type SettlementPolicyType = 'universal_life' | 'whole_life' | 'convertible_term' | 'iul';
+export type SettlementHealthRating = 'standard' | 'mild_change' | 'impaired' | 'severe';
+export type RolloverTransferMode = 'qualified_rollover' | 'exchange_1035';
 
 export type StrategyPathId =
   | 'atlasbridge'
@@ -120,14 +126,22 @@ export interface CarrierStatProfile {
   wholeGuarantee: string;
 }
 
-export interface HealthCarrierInfo {
-  id: HealthCarrierId;
+export interface CarrierNetworkInfo<T extends string = string> {
+  id: T;
   name: string;
   category: string;
   note: string;
   directoryUrl: string;
   networkSearchHint: string;
   carrierQueries?: string[];
+}
+
+export type HealthCarrierInfo = CarrierNetworkInfo<HealthCarrierId>;
+
+export interface PrivateCarrierInfo extends CarrierNetworkInfo<PrivateHealthCarrierId> {
+  rateFactor: number;
+  networkType: string;
+  networkStrength: string;
 }
 
 export interface StrategyPathConfig {

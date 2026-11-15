@@ -3,10 +3,12 @@ import {
   AcaWindowOption,
   FilingStatus,
   HealthCarrierId,
+  PrivateHealthCarrierId,
+  PrivatePpoTierId,
   TaxYear,
   UtilizationScenarioId,
 } from '../types';
-import { TAX_YEAR_PARAMS_2027 } from './constants';
+import { PRIVATE_HEALTH_CARRIERS, TAX_YEAR_PARAMS_2027 } from './constants';
 
 export function getIRSLimitForAge(age: number, _filingStatus?: FilingStatus): number {
   const baseCap = 7500;
@@ -455,6 +457,143 @@ export interface PrivatePpoQuoteEstimate {
   choiceOopMax: number;
 }
 
+export interface PrivatePpoTierOption {
+  tierId: PrivatePpoTierId;
+  title: string;
+  badge: string;
+  tagline: string;
+  monthlyPreferred: number;
+  monthlyRatedLow: number;
+  monthlyRatedHigh: number;
+  annualPreferred: number;
+  annualRatedLow: number;
+  annualRatedHigh: number;
+  deductible: number;
+  maxOop: number;
+  primaryCopayLabel: string;
+  specialistCopayLabel: string;
+  coinsuranceLabel: string;
+}
+
+export interface PrivatePpoComparisonResult {
+  carrierName: string;
+  carrierId: PrivateHealthCarrierId;
+  hasPreExisting: boolean;
+  isFamily: boolean;
+  tiers: Record<PrivatePpoTierId, PrivatePpoTierOption>;
+}
+
+const PRIVATE_DEDUCTIBLE_MULTIPLIERS: Record<number, number> = {
+  1500: 1.18,
+  2500: 1.0,
+  5000: 0.84,
+  7500: 0.73,
+  10000: 0.64,
+};
+
+export function calculatePrivatePpoComparison(params: {
+  clientAge: number;
+  householdSize: number;
+  tobacco: 'no' | 'yes';
+  preExisting: 'no' | 'yes';
+  carrierId: PrivateHealthCarrierId;
+  targetDeductibleInd: number;
+}): PrivatePpoComparisonResult {
+  const { clientAge, householdSize, tobacco, preExisting, carrierId, targetDeductibleInd } = params;
+  const carrierInfo =
+    PRIVATE_HEALTH_CARRIERS.find((c) => c.id === carrierId) || PRIVATE_HEALTH_CARRIERS[0];
+  const isFamily = householdSize > 1;
+  const famMult = isFamily ? 2 : 1;
+  const ageFactor = Math.pow(1.03, Math.max(0, clientAge - 25));
+  const householdMult = householdSize > 1 ? 1 + (householdSize - 1) * 0.65 : 1.0;
+  const tobaccoMult = tobacco === 'yes' ? 1.2 : 1.0;
+  const dedMult = PRIVATE_DEDUCTIBLE_MULTIPLIERS[targetDeductibleInd] ?? 1.0;
+
+  const basePreferred = 285 * ageFactor * householdMult * tobaccoMult * carrierInfo.rateFactor * dedMult;
+  const preferredMonthly = Math.round(basePreferred);
+  const choiceMonthly = Math.round(basePreferred * 0.82);
+  const executiveMonthly = Math.round(basePreferred * 1.16);
+  const hasPreExisting = preExisting === 'yes';
+
+  const makeTier = (
+    tierId: PrivatePpoTierId,
+    title: string,
+    badge: string,
+    tagline: string,
+    monthlyPreferred: number,
+    dedInd: number,
+    oopInd: number,
+    primaryCopayLabel: string,
+    specialistCopayLabel: string,
+    coinsuranceLabel: string
+  ): PrivatePpoTierOption => {
+    const monthlyRatedLow = Math.round(monthlyPreferred * 1.35);
+    const monthlyRatedHigh = Math.round(monthlyPreferred * 1.6);
+    return {
+      tierId,
+      title,
+      badge,
+      tagline,
+      monthlyPreferred,
+      monthlyRatedLow,
+      monthlyRatedHigh,
+      annualPreferred: monthlyPreferred * 12,
+      annualRatedLow: monthlyRatedLow * 12,
+      annualRatedHigh: monthlyRatedHigh * 12,
+      deductible: dedInd * famMult,
+      maxOop: oopInd * famMult,
+      primaryCopayLabel,
+      specialistCopayLabel,
+      coinsuranceLabel,
+    };
+  };
+
+  return {
+    carrierName: carrierInfo.name,
+    carrierId: carrierInfo.id,
+    hasPreExisting,
+    isFamily,
+    tiers: {
+      choice: makeTier(
+        'choice',
+        'Choice Value PPO',
+        'VALUE SHIELD',
+        'Lower monthly rate tailored for healthy individuals & 1099 contractors needing catastrophic protection.',
+        choiceMonthly,
+        Math.round(targetDeductibleInd * 1.5),
+        Math.round(targetDeductibleInd * 1.5) + 2500,
+        '$45 Copay (3 visits/yr)',
+        'Deductible then 30%',
+        '70% / 30% Post-Ded'
+      ),
+      preferred: makeTier(
+        'preferred',
+        'Med-Guard Preferred PPO',
+        'MOST POPULAR PPO',
+        'Balanced first-dollar primary care, diagnostics & prescription coverage with nationwide PPO access.',
+        preferredMonthly,
+        targetDeductibleInd,
+        targetDeductibleInd + 2500,
+        '$30 Copay (No Ded.)',
+        '$60 Copay',
+        '80% / 20% Post-Ded'
+      ),
+      executive: makeTier(
+        'executive',
+        'Executive Direct Care PPO',
+        '0% COINSURANCE',
+        'Comprehensive low-risk structure dropping post-deductible coinsurance to 0% with immediate outpatient copays.',
+        executiveMonthly,
+        Math.max(1000, Math.round(targetDeductibleInd * 0.6)),
+        Math.max(2500, Math.round(targetDeductibleInd * 0.6) + 1500),
+        '$20 Copay (Unlimited)',
+        '$40 Copay (No Referral)',
+        '100% / 0% Post-Ded'
+      ),
+    },
+  };
+}
+
 export function calculatePrivatePpoEstimate(params: {
   clientAge: number;
   householdSize: number;
@@ -732,3 +871,317 @@ export function calculateSelfEmployedAcaStrategy(params: {
     isSpousalLoopholeActive,
   };
 }
+
+export function getRegionLabelForZip(zipCode?: string): string {
+  const clean = (zipCode || '34994').replace(/\D/g, '').slice(0, 5);
+  if (clean.startsWith('349')) return `Treasure Coast / Martin & St. Lucie (${clean})`;
+  if (clean.startsWith('334') || clean.startsWith('331') || clean.startsWith('330')) {
+    return `South Florida Coastal (${clean})`;
+  }
+  if (clean.startsWith('32') || clean.startsWith('33') || clean.startsWith('34')) {
+    return `Florida Regional Market (${clean})`;
+  }
+  if (/^(07|08|10|11|12|13|14)/.test(clean)) return `Northeast Metro Corridor (${clean})`;
+  if (/^(75|76|77|78)/.test(clean)) return `Texas Metro Corridor (${clean})`;
+  if (/^(90|91|92|93|94|95|96)/.test(clean)) return `California Coastal Market (${clean})`;
+  return clean.length === 5 ? `Local Market (ZIP ${clean})` : 'Local Regional Market';
+}
+
+export function getCorrelatedCsvForPolicy(
+  faceValue: number,
+  policyType: 'universal_life' | 'whole_life' | 'convertible_term' | 'iul',
+  insuredAge: number
+): number {
+  if (policyType === 'convertible_term') return 0;
+  const ageRatio = Math.min(1, Math.max(0, (insuredAge - 55) / 30));
+  const csvRatio =
+    policyType === 'whole_life'
+      ? 0.15 + ageRatio * 0.10
+      : policyType === 'iul'
+      ? 0.09 + ageRatio * 0.06
+      : 0.065 + ageRatio * 0.045; // universal_life
+  return Math.round((faceValue * csvRatio) / 1000) * 1000;
+}
+
+export interface LifeSettlementAnalysisResult {
+  faceValue: number;
+  cashSurrenderVal: number;
+  policyType: 'universal_life' | 'whole_life' | 'convertible_term' | 'iul';
+  insuredAge: number;
+  healthRating: 'standard' | 'mild_change' | 'impaired' | 'severe';
+  estimatedCostBasis: number;
+  surrenderChargeDollar: number;
+  netCsvBeforeTax: number;
+  surrenderTaxableGain: number;
+  surrenderTaxDollar: number;
+  netSurrenderAfterTax: number;
+  forfeitedDeathBenefit: number;
+  estGrossSettlement: number;
+  estLowSettlement: number;
+  estHighSettlement: number;
+  settlementRatioPct: number;
+  settlementTaxDollar: number;
+  netSettlementAfterTax: number;
+  netAfterTaxSurplus: number;
+  surrenderMultiple: number | null;
+  retainedDeathBenefit: number;
+}
+
+export function calculateLifeSettlementAnalysis(params: {
+  faceValue: number;
+  cashSurrenderVal: number;
+  policyType: 'universal_life' | 'whole_life' | 'convertible_term' | 'iul';
+  insuredAge: number;
+  healthRating: 'standard' | 'mild_change' | 'impaired' | 'severe';
+  taxBracket: number;
+  inSurrenderChargePeriod: boolean;
+}): LifeSettlementAnalysisResult {
+  const {
+    faceValue,
+    cashSurrenderVal,
+    policyType,
+    insuredAge,
+    healthRating,
+    taxBracket,
+    inSurrenderChargePeriod,
+  } = params;
+
+  const cleanCsv = policyType === 'convertible_term' ? 0 : Math.max(0, cashSurrenderVal);
+
+  // Surrender Downsides
+  const surrenderChargeRate =
+    policyType === 'convertible_term' || !inSurrenderChargePeriod
+      ? 0
+      : policyType === 'whole_life'
+      ? 0.05
+      : 0.08;
+  const surrenderChargeDollar = Math.round(cleanCsv * surrenderChargeRate);
+  const netCsvBeforeTax = Math.max(0, cleanCsv - surrenderChargeDollar);
+
+  // Realistic cost basis (cumulative premiums paid)
+  const estimatedCostBasis =
+    policyType === 'convertible_term'
+      ? Math.round(faceValue * 0.03)
+      : Math.round(cleanCsv * 0.68);
+
+  const surrenderTaxableGain = Math.max(0, netCsvBeforeTax - estimatedCostBasis);
+  const surrenderTaxDollar = Math.round(surrenderTaxableGain * (taxBracket / 100));
+  const netSurrenderAfterTax = Math.max(0, netCsvBeforeTax - surrenderTaxDollar);
+  const forfeitedDeathBenefit = Math.max(0, faceValue - netSurrenderAfterTax);
+
+  // Institutional Settlement Valuation Model (Age x Policy Type x Health Rating)
+  const ageBaseRatio = Math.max(0.08, Math.min(0.40, 0.09 + (insuredAge - 55) * 0.0085));
+  const policyFactor =
+    policyType === 'universal_life'
+      ? 1.06
+      : policyType === 'iul'
+      ? 1.0
+      : policyType === 'whole_life'
+      ? 0.94
+      : 0.86;
+  const healthFactor =
+    healthRating === 'standard'
+      ? 0.72
+      : healthRating === 'mild_change'
+      ? 1.0
+      : healthRating === 'impaired'
+      ? 1.32
+      : 1.62;
+
+  const rawRatio = Math.max(0.07, Math.min(0.56, ageBaseRatio * policyFactor * healthFactor));
+  const minimumMarketFloor =
+    cleanCsv > 0 ? Math.round(cleanCsv * 1.35) : Math.round(faceValue * 0.07);
+  const estGrossSettlement = Math.max(minimumMarketFloor, Math.round(faceValue * rawRatio));
+  const estLowSettlement = Math.round(estGrossSettlement * 0.88);
+  const estHighSettlement = Math.min(
+    Math.round(faceValue * 0.65),
+    Math.round(estGrossSettlement * 1.14)
+  );
+  const settlementRatioPct = faceValue > 0 ? Math.round((estGrossSettlement / faceValue) * 100) : 0;
+
+  // Life Settlement Tax Treatment (Rev. Rul. 2009-13 / TCJA basis recovery):
+  // 1) Up to cost basis = tax-free return of basis
+  // 2) Gain up to net CSV = ordinary income tax
+  // 3) Excess above CSV = long-term capital gains (15% / 20%)
+  const ordinarySlice = Math.max(
+    0,
+    Math.min(estGrossSettlement, netCsvBeforeTax) - estimatedCostBasis
+  );
+  const ltcgSlice = Math.max(
+    0,
+    estGrossSettlement - Math.max(estimatedCostBasis, netCsvBeforeTax)
+  );
+  const ltcgRate = taxBracket >= 32 ? 0.20 : 0.15;
+  const settlementTaxDollar = Math.round(
+    ordinarySlice * (taxBracket / 100) + ltcgSlice * ltcgRate
+  );
+  const netSettlementAfterTax = Math.max(0, estGrossSettlement - settlementTaxDollar);
+
+  const netAfterTaxSurplus = netSettlementAfterTax - netSurrenderAfterTax;
+  const surrenderMultiple =
+    netSurrenderAfterTax > 0
+      ? Number((netSettlementAfterTax / netSurrenderAfterTax).toFixed(1))
+      : null;
+
+  const retainedDeathBenefit = Math.round(
+    faceValue * (insuredAge >= 75 ? 0.45 : insuredAge >= 68 ? 0.38 : 0.30)
+  );
+
+  return {
+    faceValue,
+    cashSurrenderVal: cleanCsv,
+    policyType,
+    insuredAge,
+    healthRating,
+    estimatedCostBasis,
+    surrenderChargeDollar,
+    netCsvBeforeTax,
+    surrenderTaxableGain,
+    surrenderTaxDollar,
+    netSurrenderAfterTax,
+    forfeitedDeathBenefit,
+    estGrossSettlement,
+    estLowSettlement,
+    estHighSettlement,
+    settlementRatioPct,
+    settlementTaxDollar,
+    netSettlementAfterTax,
+    netAfterTaxSurplus,
+    surrenderMultiple,
+    retainedDeathBenefit,
+  };
+}
+
+export interface Rollover1035AnalysisResult {
+  transferMode: 'qualified_rollover' | 'exchange_1035';
+  capital: number;
+  costBasisDollar: number;
+  legacySurrenderFeeDollar: number;
+  ordinaryTaxDollar: number;
+  earlyPenaltyPct: number;
+  earlyPenaltyDollar: number;
+  totalCashOutErosion: number;
+  netCashOutToday: number;
+  mandatoryWithholdingAvoided: number;
+  upfrontBonusDollar: number;
+  protectedStartingBase: number;
+  annualFeeSaved: number;
+  tenYearFeeDragTotal: number;
+  yearLabels: string[];
+  directTransferSeries: number[];
+  stayLegacySeries: number[];
+  cashOutSeries: number[];
+  tenYearProtectedEnd: number;
+  tenYearLegacyEnd: number;
+  tenYearCashOutEnd: number;
+  tenYearAdvantageOverLegacy: number;
+  tenYearAdvantageOverCashOut: number;
+}
+
+export function calculateRollover1035Analysis(params: {
+  transferMode: 'qualified_rollover' | 'exchange_1035';
+  capital: number;
+  costBasisPct: number;
+  currentFeeRate: number;
+  legacySurrenderPct: number;
+  bonusRatePct: number;
+  clientAge: number;
+  taxBracket: number;
+  expectedGrossYield: number;
+}): Rollover1035AnalysisResult {
+  const {
+    transferMode,
+    capital,
+    costBasisPct,
+    currentFeeRate,
+    legacySurrenderPct,
+    bonusRatePct,
+    clientAge,
+    taxBracket,
+    expectedGrossYield,
+  } = params;
+
+  const isQualified = transferMode === 'qualified_rollover';
+  const costBasisDollar = isQualified ? 0 : Math.round(capital * (costBasisPct / 100));
+
+  // Cash-out downside
+  const legacySurrenderFeeDollar = isQualified
+    ? 0
+    : Math.round(capital * (legacySurrenderPct / 100));
+  const taxableGainOrDistribution = isQualified
+    ? capital
+    : Math.max(0, capital - legacySurrenderFeeDollar - costBasisDollar);
+
+  const ordinaryTaxDollar = Math.round(taxableGainOrDistribution * (taxBracket / 100));
+  const earlyPenaltyPct = clientAge < 59.5 ? 10 : 0;
+  const earlyPenaltyDollar = Math.round(taxableGainOrDistribution * (earlyPenaltyPct / 100));
+  const totalCashOutErosion =
+    legacySurrenderFeeDollar + ordinaryTaxDollar + earlyPenaltyDollar;
+  const netCashOutToday = Math.max(0, capital - totalCashOutErosion);
+
+  // Direct Rollover / 1035 Upside
+  const mandatoryWithholdingAvoided = isQualified ? Math.round(capital * 0.20) : 0;
+  const upfrontBonusDollar = Math.round(capital * (bonusRatePct / 100));
+  const protectedStartingBase = Math.max(0, capital - legacySurrenderFeeDollar) + upfrontBonusDollar;
+
+  // 10-year projections
+  const grossRate = expectedGrossYield / 100;
+  const legacyNetRate = Math.max(0.005, (expectedGrossYield - currentFeeRate) / 100);
+  // Institutional FIA/MYGA/Direct Custodian friction (~0.35% vs legacy)
+  const targetPlatformFee = 0.35;
+  const directNetRate = Math.max(0.01, (expectedGrossYield - targetPlatformFee) / 100);
+  // After-tax brokerage reinvestment suffers annual tax drag
+  const cashOutNetRate = Math.max(
+    0.005,
+    (expectedGrossYield - 0.65) * (1 - (taxBracket / 100) * 0.7) / 100
+  );
+
+  const yearLabels: string[] = [];
+  const directTransferSeries: number[] = [];
+  const stayLegacySeries: number[] = [];
+  const cashOutSeries: number[] = [];
+
+  let grossNoFeeEnd = capital;
+  for (let yr = 0; yr <= 10; yr++) {
+    yearLabels.push(`Yr ${yr}`);
+    directTransferSeries.push(Math.round(protectedStartingBase * Math.pow(1 + directNetRate, yr)));
+    stayLegacySeries.push(Math.round(capital * Math.pow(1 + legacyNetRate, yr)));
+    cashOutSeries.push(Math.round(netCashOutToday * Math.pow(1 + cashOutNetRate, yr)));
+    if (yr === 10) {
+      grossNoFeeEnd = Math.round(capital * Math.pow(1 + grossRate, 10));
+    }
+  }
+
+  const tenYearProtectedEnd = directTransferSeries[10];
+  const tenYearLegacyEnd = stayLegacySeries[10];
+  const tenYearCashOutEnd = cashOutSeries[10];
+  const annualFeeSaved = Math.round(capital * Math.max(0, (currentFeeRate - targetPlatformFee) / 100));
+  const tenYearFeeDragTotal = Math.max(0, grossNoFeeEnd - tenYearLegacyEnd);
+
+  return {
+    transferMode,
+    capital,
+    costBasisDollar,
+    legacySurrenderFeeDollar,
+    ordinaryTaxDollar,
+    earlyPenaltyPct,
+    earlyPenaltyDollar,
+    totalCashOutErosion,
+    netCashOutToday,
+    mandatoryWithholdingAvoided,
+    upfrontBonusDollar,
+    protectedStartingBase,
+    annualFeeSaved,
+    tenYearFeeDragTotal,
+    yearLabels,
+    directTransferSeries,
+    stayLegacySeries,
+    cashOutSeries,
+    tenYearProtectedEnd,
+    tenYearLegacyEnd,
+    tenYearCashOutEnd,
+    tenYearAdvantageOverLegacy: tenYearProtectedEnd - tenYearLegacyEnd,
+    tenYearAdvantageOverCashOut: tenYearProtectedEnd - tenYearCashOutEnd,
+  };
+}
+

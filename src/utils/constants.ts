@@ -5,6 +5,7 @@ import {
   LifePolicySubtype,
   LifeRiderDefinition,
   LifeTabType,
+  PrivateCarrierInfo,
   StrategyPathConfig,
 } from '../types';
 
@@ -118,6 +119,57 @@ export const REGIONAL_HEALTH_CARRIERS: HealthCarrierInfo[] = [
     directoryUrl: 'https://www.uhc.com/find-a-doctor',
     networkSearchHint: 'primary care physician clinic hospital urgent care',
     carrierQueries: ['Optum primary care clinic', 'UnitedHealthcare physician medical center urgent care'],
+  },
+];
+
+export const PRIVATE_HEALTH_CARRIERS: PrivateCarrierInfo[] = [
+  {
+    id: 'cigna_ppo',
+    name: 'Cigna Open Access PPO',
+    category: 'Nationwide Open Access Plus PPO',
+    note: 'Broad National Hospital & Specialist Access',
+    directoryUrl: 'https://hcpdirectory.cigna.com/',
+    networkSearchHint: 'primary care clinic urgent care medical center hospital',
+    carrierQueries: ['Cigna primary care clinic', 'Cleveland Clinic HCA medical center urgent care'],
+    rateFactor: 1.03,
+    networkType: 'Nationwide Open Access PPO',
+    networkStrength: 'No PCP referrals required across 1.5M+ providers & major regional hospitals',
+  },
+  {
+    id: 'uhc_ppo',
+    name: 'UnitedHealthcare Choice Plus',
+    category: 'UHC Choice Plus Nationwide PPO',
+    note: 'Largest Direct Physician & Optum Footprint',
+    directoryUrl: 'https://www.uhc.com/find-a-doctor',
+    networkSearchHint: 'primary care physician clinic hospital urgent care',
+    carrierQueries: ['UnitedHealthcare Optum primary care clinic', 'hospital urgent care medical center'],
+    rateFactor: 1.06,
+    networkType: 'Choice Plus National PPO',
+    networkStrength: 'Premier physician, outpatient surgical & diagnostic imaging network nationwide',
+  },
+  {
+    id: 'multiplan_ppo',
+    name: 'MultiPlan / PHCS PPO',
+    category: 'Independent Nationwide PHCS Wrap PPO',
+    note: 'Top Cost-Efficiency for Healthy & 1099 Families',
+    directoryUrl: 'https://www.multiplan.com/webcenter/portal/ProviderSearch',
+    networkSearchHint: 'primary care medical center urgent care hospital',
+    carrierQueries: ['primary care physician medical clinic', 'hospital urgent care medical center'],
+    rateFactor: 0.94,
+    networkType: 'MultiPlan / PHCS Practitioner & Ancillary PPO',
+    networkStrength: 'Flexible nationwide network discounts paired with 0% referral restrictions',
+  },
+  {
+    id: 'aetna_ppo',
+    name: 'Aetna Open Choice PPO',
+    category: 'Aetna Open Choice & MinuteClinic PPO',
+    note: 'Strong Outpatient & CVS Health Integration',
+    directoryUrl: 'https://www.aetna.com/dsepublic/',
+    networkSearchHint: 'primary care clinic urgent care medical center hospital',
+    carrierQueries: ['Aetna MinuteClinic primary care', 'hospital medical center urgent care'],
+    rateFactor: 1.0,
+    networkType: 'Open Choice National PPO',
+    networkStrength: 'Seamless specialist access plus $0/low-cost MinuteClinic & telehealth perks',
   },
 ];
 
