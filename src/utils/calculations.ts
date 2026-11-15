@@ -1,4 +1,11 @@
-import { AcaWindowOption, FilingStatus } from '../types';
+import {
+  AcaMetalTier,
+  AcaWindowOption,
+  FilingStatus,
+  HealthCarrierId,
+  TaxYear,
+  UtilizationScenarioId,
+} from '../types';
 import { TAX_YEAR_PARAMS_2027 } from './constants';
 
 export function getIRSLimitForAge(age: number, _filingStatus?: FilingStatus): number {
@@ -105,8 +112,12 @@ export function getTraditionalIRADeductionLimit(
   };
 }
 
-export function get100PercentFPL(householdSize: number): number {
-  return TAX_YEAR_PARAMS_2027.baseFPL + (householdSize - 1) * TAX_YEAR_PARAMS_2027.perAddFPL;
+export function get100PercentFPL(householdSize: number, taxYear: TaxYear = '2027'): number {
+  // 2026 Marketplace Plan Year uses 2025 HHS Poverty Guidelines ($15,650 + $5,500)
+  // 2027+ Marketplace Plan Year uses 2026 HHS Poverty Guidelines ($15,960 + $5,680)
+  const baseFPL = taxYear === '2026' ? 15650 : TAX_YEAR_PARAMS_2027.baseFPL;
+  const perAddFPL = taxYear === '2026' ? 5500 : TAX_YEAR_PARAMS_2027.perAddFPL;
+  return baseFPL + Math.max(0, householdSize - 1) * perAddFPL;
 }
 
 export function getMarginalTaxRate(agi: number, filingStatus: FilingStatus): number {
@@ -137,69 +148,342 @@ export function isOutsideAcaEnrollmentWindow(acaWindow: AcaWindowOption): boolea
   return !isInWindow;
 }
 
-// Calculate ACA Benchmark Silver Premium and Subsidy based on FPL percentage
-export function calculateAcaDetails(agi: number, householdSize: number, clientAge: number) {
-  const fpl100 = get100PercentFPL(householdSize);
-  const fplPct = Math.round((agi / fpl100) * 100);
+export function formatBoundaryAwareFpl(exact: number): number {
+  const rounded = Math.round(exact);
+  const boundaries = [100, 133, 138, 150, 200, 250, 300, 400, 500];
+  for (const b of boundaries) {
+    if ((exact < b && rounded >= b) || (exact > b && rounded <= b)) {
+      return Number(exact.toFixed(2));
+    }
+  }
+  return rounded;
+}
 
-  // Age based base benchmark silver cost for Martin County / Stuart, FL
+// Calculate ACA Benchmark Silver Premium, Subsidy, and 2026/2027 CMS CSR Tiers based on exact unrounded FPL percentage
+export function calculateAcaDetails(
+  agi: number,
+  householdSize: number,
+  clientAge: number,
+  taxYear: TaxYear = '2027'
+) {
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const exactFplPct = fpl100 > 0 ? (agi / fpl100) * 100 : 0;
+  const fplPct = formatBoundaryAwareFpl(exactFplPct);
+  const isFamily = householdSize > 1;
+  const is2026 = taxYear === '2026';
+
+  // Age-based base benchmark Silver SLCSP cost for Martin County / Treasure Coast, FL
   const ageFactor = 1 + Math.max(0, clientAge - 21) * 0.035;
-  const benchmarkCostAnnual = 6800 * ageFactor;
+  const householdRatingFactor = householdSize > 1 ? 1 + (householdSize - 1) * 0.48 : 1.0;
+  const benchmarkCostAnnual = 6800 * ageFactor * householdRatingFactor;
   const benchmarkCostMonthly = benchmarkCostAnnual / 12;
 
-  // Expected contribution percentage based on ACA sliding scale
-  let expectedContribPct = 0.085;
-  if (fplPct <= 150) expectedContribPct = 0.0;
-  else if (fplPct <= 200) expectedContribPct = 0.02;
-  else if (fplPct <= 250) expectedContribPct = 0.04;
-  else if (fplPct <= 300) expectedContribPct = 0.06;
-  else if (fplPct <= 400) expectedContribPct = 0.085;
-  else expectedContribPct = 0.085;
+  // IRC § 36B Statutory APTC Eligibility Bounds: exact 100% FPL minimum to exact 400% FPL statutory cliff
+  const isBelow100Fpl = agi < fpl100;
+  const isAbove400Cliff = agi > fpl100 * 4;
+  let expectedContribPct = 0.0996;
+  if (isBelow100Fpl) expectedContribPct = 0;
+  else if (exactFplPct <= 133) expectedContribPct = 0.021;
+  else if (exactFplPct <= 150) expectedContribPct = 0.0314;
+  else if (exactFplPct <= 200) expectedContribPct = 0.054;
+  else if (exactFplPct <= 250) expectedContribPct = 0.0752;
+  else if (exactFplPct <= 300) expectedContribPct = 0.092;
+  else if (!isAbove400Cliff) expectedContribPct = 0.0996;
+  else expectedContribPct = 1.0;
 
   const maxExpectedAnnual = agi * expectedContribPct;
   const maxExpectedMonthly = maxExpectedAnnual / 12;
 
-  const monthlySubsidy = Math.max(0, benchmarkCostMonthly - maxExpectedMonthly);
+  const monthlySubsidy =
+    isBelow100Fpl || isAbove400Cliff
+      ? 0
+      : Math.max(0, benchmarkCostMonthly - maxExpectedMonthly);
   const netBenchmarkMonthly = Math.max(0, benchmarkCostMonthly - monthlySubsidy);
 
-  // CSR tier and plan metrics
+  // CMS Statutory OOP Maximums: 2026 ($10,600 Ind / $21,200 Fam), 2027+ ($12,000 Ind / $24,000 Fam)
+  const statutoryIndOopMax = is2026 ? 10600 : 12000;
   let csrLevel = 'Standard Silver (70% AV)';
   let deductible = 5800;
-  let oopMax = 9100;
+  let oopMax = statutoryIndOopMax;
   let primaryCopay = 35;
   let av = '70% Silver';
 
-  if (fplPct <= 150) {
+  if (!isBelow100Fpl && exactFplPct <= 150) {
     csrLevel = 'Silver CSR 94% (Max Assistance)';
     deductible = 0;
-    oopMax = 1500;
+    oopMax = is2026 ? 1800 : 2000;
     primaryCopay = 0;
     av = '94% Silver';
-  } else if (fplPct <= 200) {
+  } else if (exactFplPct > 150 && exactFplPct <= 200) {
     csrLevel = 'Silver CSR 87% (High Assistance)';
     deductible = 800;
-    oopMax = 3000;
+    oopMax = is2026 ? 3500 : 4000;
     primaryCopay = 10;
     av = '87% Silver';
-  } else if (fplPct <= 250) {
+  } else if (exactFplPct > 200 && exactFplPct <= 250) {
     csrLevel = 'Enhanced Silver CSR 73%';
     deductible = 2500;
-    oopMax = 5800;
+    oopMax = is2026 ? 8450 : 9600;
     primaryCopay = 20;
     av = '73% Silver';
+  } else if (isBelow100Fpl) {
+    csrLevel = 'Below 100% FPL (Medicaid / Coverage Gap)';
+    deductible = 5800;
+    oopMax = statutoryIndOopMax;
+    primaryCopay = 35;
+    av = '70% Silver (Unsubsidized)';
   }
+
+  const familyOopMax = isFamily ? oopMax * 2 : oopMax;
 
   return {
     fpl100,
     fplPct,
+    exactFplPct,
+    isFamily,
+    isBelow100Fpl,
+    isAbove400Cliff,
+    isMedicaidRange: exactFplPct <= 138,
+    statutoryIndOopMax,
+    statutoryFamOopMax: statutoryIndOopMax * 2,
+    expectedContribPct: isBelow100Fpl || isAbove400Cliff ? 0 : expectedContribPct,
     benchmarkCostMonthly: Math.round(benchmarkCostMonthly),
     monthlySubsidy: Math.round(monthlySubsidy),
     netMonthlyPremium: Math.round(netBenchmarkMonthly),
     csrLevel,
     deductible,
     oopMax,
+    familyOopMax,
     primaryCopay,
     av,
+  };
+}
+
+export interface AcaTierProjectionResult {
+  tier: AcaMetalTier;
+  title: string;
+  badge: string;
+  avLabel: string;
+  monthlyPremium: number;
+  annualPremium: number;
+  deductible: number;
+  individualOopMax: number;
+  familyOopMax: number;
+  applicableOopMax: number;
+  primaryCopayLabel: string;
+  scenarioOopEstimate: number;
+  totalProjectedAnnualCost: number;
+  carrierPositionNote: string;
+}
+
+const CARRIER_RATE_FACTORS: Record<HealthCarrierId, { bronzeMult: number; silverMult: number; goldMult: number; note: string }> = {
+  oscar: {
+    bronzeMult: 0.94,
+    silverMult: 0.97,
+    goldMult: 0.98,
+    note: 'Competitive EPO pricing in Treasure Coast / Martin County',
+  },
+  fl_blue: {
+    bronzeMult: 1.05,
+    silverMult: 1.04,
+    goldMult: 1.02,
+    note: 'Broadest statewide PPO/HMO hospital contracting',
+  },
+  ambetter: {
+    bronzeMult: 0.90,
+    silverMult: 0.95,
+    goldMult: 0.99,
+    note: 'Aggressive entry-level Bronze & CSR Silver monthly premiums',
+  },
+  fhcp: {
+    bronzeMult: 0.97,
+    silverMult: 0.99,
+    goldMult: 0.95,
+    note: 'Integrated HMO model with lower Tier-1 Gold copay structures',
+  },
+  molina: {
+    bronzeMult: 0.92,
+    silverMult: 0.96,
+    goldMult: 1.01,
+    note: 'Strong low-income Silver CSR & value Bronze Exchange pricing',
+  },
+  uhc: {
+    bronzeMult: 1.02,
+    silverMult: 1.02,
+    goldMult: 1.03,
+    note: 'Extensive regional specialist & Optum primary network access',
+  },
+};
+
+export function calculateAcaTierProjection(params: {
+  agi: number;
+  householdSize: number;
+  clientAge: number;
+  carrierId: HealthCarrierId;
+  scenario: UtilizationScenarioId;
+  taxYear?: TaxYear;
+}): {
+  baseAca: ReturnType<typeof calculateAcaDetails>;
+  tiers: Record<AcaMetalTier, AcaTierProjectionResult>;
+} {
+  const { agi, householdSize, clientAge, carrierId, scenario, taxYear = '2027' } = params;
+  const baseAca = calculateAcaDetails(agi, householdSize, clientAge, taxYear);
+  const carrierFactor = CARRIER_RATE_FACTORS[carrierId] || CARRIER_RATE_FACTORS.oscar;
+  const isFamily = householdSize > 1;
+  const dedMult = isFamily ? 2 : 1;
+  const is2026 = taxYear === '2026';
+
+  // Gross monthly rates prior to APTC (Bronze ~74% of SLCSP, Silver = SLCSP, Gold ~118% of SLCSP)
+  const bronzeGrossMonthly = baseAca.benchmarkCostMonthly * 0.74 * carrierFactor.bronzeMult;
+  const silverGrossMonthly = baseAca.benchmarkCostMonthly * carrierFactor.silverMult;
+  const goldGrossMonthly = baseAca.benchmarkCostMonthly * 1.18 * carrierFactor.goldMult;
+
+  const bronzeNetMonthly = Math.max(0, Math.round(bronzeGrossMonthly - baseAca.monthlySubsidy));
+  const silverNetMonthly = Math.max(0, Math.round(silverGrossMonthly - baseAca.monthlySubsidy));
+  const goldNetMonthly = Math.max(0, Math.round(goldGrossMonthly - baseAca.monthlySubsidy));
+
+  // Statutory 2026 vs 2027 CMS Deductibles & OOP Maximums
+  const bronzeDeductible = 7500 * dedMult;
+  const bronzeIndOop = baseAca.statutoryIndOopMax;
+  const bronzeFamOop = baseAca.statutoryFamOopMax;
+  const bronzeApplicableOop = isFamily ? bronzeFamOop : bronzeIndOop;
+
+  const silverDeductible = baseAca.deductible * dedMult;
+  const silverIndOop = baseAca.oopMax;
+  const silverFamOop = baseAca.familyOopMax;
+  const silverApplicableOop = isFamily ? silverFamOop : silverIndOop;
+
+  const goldDeductible = 1500 * dedMult;
+  const goldIndOop = is2026 ? 7800 : 8500;
+  const goldFamOop = goldIndOop * 2;
+  const goldApplicableOop = isFamily ? goldFamOop : goldIndOop;
+
+  const estimateScenarioOop = (
+    tier: AcaMetalTier,
+    ded: number,
+    oopCap: number,
+    copay: number
+  ): number => {
+    if (scenario === 'low') {
+      const visitsCost = tier === 'bronze' ? 320 * (isFamily ? 1.6 : 1) : copay * 3 * (isFamily ? 1.6 : 1);
+      return Math.min(oopCap, Math.round(visitsCost));
+    }
+    if (scenario === 'moderate') {
+      const targetCareSpend = isFamily ? 6800 : 4200;
+      if (tier === 'silver' && !baseAca.isBelow100Fpl && baseAca.exactFplPct <= 150) {
+        return Math.min(oopCap, Math.round(targetCareSpend * 0.08));
+      }
+      if (targetCareSpend <= ded) {
+        return Math.min(oopCap, Math.round(targetCareSpend * (tier === 'gold' ? 0.65 : 0.92)));
+      }
+      const postDedCoinsurance = tier === 'bronze' ? 0.4 : tier === 'gold' ? 0.2 : !baseAca.isBelow100Fpl && baseAca.exactFplPct <= 200 ? 0.15 : 0.3;
+      return Math.min(oopCap, Math.round(ded + (targetCareSpend - ded) * postDedCoinsurance));
+    }
+    return oopCap;
+  };
+
+  const bronzeScenarioOop = estimateScenarioOop('bronze', bronzeDeductible, bronzeApplicableOop, 45);
+  const silverScenarioOop = estimateScenarioOop('silver', silverDeductible, silverApplicableOop, baseAca.primaryCopay);
+  const goldScenarioOop = estimateScenarioOop('gold', goldDeductible, goldApplicableOop, 20);
+
+  return {
+    baseAca,
+    tiers: {
+      bronze: {
+        tier: 'bronze',
+        title: 'Bronze Catastrophic Protection',
+        badge: 'BRONZE (60% AV)',
+        avLabel: '60% AV',
+        monthlyPremium: bronzeNetMonthly,
+        annualPremium: bronzeNetMonthly * 12,
+        deductible: bronzeDeductible,
+        individualOopMax: bronzeIndOop,
+        familyOopMax: bronzeFamOop,
+        applicableOopMax: bronzeApplicableOop,
+        primaryCopayLabel: '$45 after deductible (preventive $0)',
+        scenarioOopEstimate: bronzeScenarioOop,
+        totalProjectedAnnualCost: bronzeNetMonthly * 12 + bronzeScenarioOop,
+        carrierPositionNote: carrierFactor.note,
+      },
+      silver: {
+        tier: 'silver',
+        title: !baseAca.isBelow100Fpl && baseAca.exactFplPct <= 250 ? 'CSR-Enhanced Silver Plan' : 'Standard Benchmark Silver',
+        badge: baseAca.csrLevel.toUpperCase(),
+        avLabel: baseAca.av,
+        monthlyPremium: silverNetMonthly,
+        annualPremium: silverNetMonthly * 12,
+        deductible: silverDeductible,
+        individualOopMax: silverIndOop,
+        familyOopMax: silverFamOop,
+        applicableOopMax: silverApplicableOop,
+        primaryCopayLabel: baseAca.primaryCopay === 0 ? '$0 PCP copay' : `$${baseAca.primaryCopay} PCP copay`,
+        scenarioOopEstimate: silverScenarioOop,
+        totalProjectedAnnualCost: silverNetMonthly * 12 + silverScenarioOop,
+        carrierPositionNote: carrierFactor.note,
+      },
+      gold: {
+        tier: 'gold',
+        title: 'Gold Comprehensive Care',
+        badge: 'GOLD (80% AV)',
+        avLabel: '80% AV',
+        monthlyPremium: goldNetMonthly,
+        annualPremium: goldNetMonthly * 12,
+        deductible: goldDeductible,
+        individualOopMax: goldIndOop,
+        familyOopMax: goldFamOop,
+        applicableOopMax: goldApplicableOop,
+        primaryCopayLabel: '$20 flat PCP copay',
+        scenarioOopEstimate: goldScenarioOop,
+        totalProjectedAnnualCost: goldNetMonthly * 12 + goldScenarioOop,
+        carrierPositionNote: carrierFactor.note,
+      },
+    },
+  };
+}
+
+export interface PrivatePpoQuoteEstimate {
+  hasPreExisting: boolean;
+  preferredMonthly: number;
+  preferredRatedLowMonthly: number;
+  preferredRatedHighMonthly: number;
+  choiceValueMonthly: number;
+  choiceRatedLowMonthly: number;
+  choiceRatedHighMonthly: number;
+  preferredDeductible: number;
+  preferredOopMax: number;
+  choiceDeductible: number;
+  choiceOopMax: number;
+}
+
+export function calculatePrivatePpoEstimate(params: {
+  clientAge: number;
+  householdSize: number;
+  tobacco: 'no' | 'yes';
+  preExisting: 'no' | 'yes';
+}): PrivatePpoQuoteEstimate {
+  const { clientAge, householdSize, tobacco, preExisting } = params;
+  const ageFactor = Math.pow(1.03, Math.max(0, clientAge - 25));
+  const householdMult = householdSize > 1 ? 1 + (householdSize - 1) * 0.65 : 1.0;
+  const tobaccoMult = tobacco === 'yes' ? 1.2 : 1.0;
+
+  const preferredMonthly = Math.round(285 * ageFactor * householdMult * tobaccoMult);
+  const choiceValueMonthly = Math.round(preferredMonthly * 0.82);
+
+  // Underwritten private health carriers typically apply +35% to +60% rate-ups (or exclusion/decline) when pre-existing conditions are present
+  const hasPreExisting = preExisting === 'yes';
+
+  return {
+    hasPreExisting,
+    preferredMonthly,
+    preferredRatedLowMonthly: Math.round(preferredMonthly * 1.35),
+    preferredRatedHighMonthly: Math.round(preferredMonthly * 1.6),
+    choiceValueMonthly,
+    choiceRatedLowMonthly: Math.round(choiceValueMonthly * 1.35),
+    choiceRatedHighMonthly: Math.round(choiceValueMonthly * 1.6),
+    preferredDeductible: householdSize > 1 ? 5000 : 2500,
+    preferredOopMax: householdSize > 1 ? 10000 : 5000,
+    choiceDeductible: householdSize > 1 ? 10000 : 5000,
+    choiceOopMax: householdSize > 1 ? 15000 : 7500,
   };
 }
 
@@ -223,6 +507,8 @@ export interface SelfEmployedStrategyResult {
   optimizedFplPct: number;
   baselineAca: ReturnType<typeof calculateAcaDetails>;
   optimizedAca: ReturnType<typeof calculateAcaDetails>;
+  baselineSilverTier: AcaTierProjectionResult;
+  optimizedSilverTier: AcaTierProjectionResult;
   monthlySubsidyGain: number;
   annualSubsidyGain: number;
   annualTaxSavings: number;
@@ -245,6 +531,8 @@ export function calculateSelfEmployedAcaStrategy(params: {
   stackSpousalIra?: boolean;
   spouseAge?: number;
   spouseCoveredByPlan?: boolean;
+  taxYear?: TaxYear;
+  carrierId?: HealthCarrierId;
 }): SelfEmployedStrategyResult {
   const {
     grossAGI,
@@ -257,6 +545,8 @@ export function calculateSelfEmployedAcaStrategy(params: {
     stackSpousalIra = true,
     spouseAge = 52,
     spouseCoveredByPlan = false,
+    taxYear = '2027',
+    carrierId = 'oscar',
   } = params;
 
   const isMarried = filingStatus === 'married';
@@ -376,15 +666,33 @@ export function calculateSelfEmployedAcaStrategy(params: {
 
   // 5. Total Combined Pre-Tax Deduction & Final Optimized AGI
   const totalPreTaxDeduction = primaryPlanContribution + clientIraDeductible + spouseIraDeductible;
-  const povertyFloor = get100PercentFPL(householdSize) + 100;
+  const povertyFloor = get100PercentFPL(householdSize, taxYear) + 100;
   const optimizedAgi =
     grossAGI <= povertyFloor
       ? Math.max(0, grossAGI - totalPreTaxDeduction)
       : Math.max(povertyFloor, grossAGI - totalPreTaxDeduction);
 
-  // 6. ACA Benchmark & Subsidy Math: Baseline vs Optimized
-  const baselineAca = calculateAcaDetails(grossAGI, householdSize, clientAge);
-  const optimizedAca = calculateAcaDetails(optimizedAgi, householdSize, clientAge);
+  // 6. ACA Benchmark & Subsidy Math: Baseline vs Optimized (synced with taxYear & carrierId)
+  const baselineProjection = calculateAcaTierProjection({
+    agi: grossAGI,
+    householdSize,
+    clientAge,
+    carrierId,
+    scenario: 'moderate',
+    taxYear,
+  });
+  const optimizedProjection = calculateAcaTierProjection({
+    agi: optimizedAgi,
+    householdSize,
+    clientAge,
+    carrierId,
+    scenario: 'moderate',
+    taxYear,
+  });
+  const baselineAca = baselineProjection.baseAca;
+  const optimizedAca = optimizedProjection.baseAca;
+  const baselineSilverTier = baselineProjection.tiers.silver;
+  const optimizedSilverTier = optimizedProjection.tiers.silver;
 
   const monthlySubsidyGain = Math.max(0, optimizedAca.monthlySubsidy - baselineAca.monthlySubsidy);
   const annualSubsidyGain = monthlySubsidyGain * 12;
@@ -414,6 +722,8 @@ export function calculateSelfEmployedAcaStrategy(params: {
     optimizedFplPct: optimizedAca.fplPct,
     baselineAca,
     optimizedAca,
+    baselineSilverTier,
+    optimizedSilverTier,
     monthlySubsidyGain,
     annualSubsidyGain,
     annualTaxSavings,

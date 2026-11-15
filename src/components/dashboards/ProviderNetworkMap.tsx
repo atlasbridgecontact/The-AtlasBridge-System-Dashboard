@@ -78,8 +78,8 @@ function isQuotaError(err: unknown): boolean {
 
 function matchesCarrierBranding(placeName: string, carrierId: HealthCarrierId): boolean {
   const lower = placeName.toLowerCase();
-  if (carrierId === 'aetna') {
-    return lower.includes('cvs') || lower.includes('minuteclinic') || lower.includes('healthhub') || lower.includes('aetna');
+  if (carrierId === 'molina') {
+    return lower.includes('molina') || lower.includes('community health') || lower.includes('clinic') || lower.includes('medical center');
   }
   if (carrierId === 'fl_blue') {
     return lower.includes('florida blue') || lower.includes('sanitas') || lower.includes('guidewell');
@@ -302,7 +302,7 @@ const InnerProviderMap: React.FC<InnerProviderMapProps> = ({
         const primaryQuery =
           facilityCategory === 'all'
             ? `${carrierKeyword} ${carrier.networkSearchHint} near ${activeZip}`
-            : `${carrier.id === 'aetna' && facilityCategory === 'hospital' ? carrier.name : carrierKeyword} ${categoryPhrase} near ${activeZip}`;
+            : `${carrierKeyword} ${categoryPhrase} near ${activeZip}`;
 
         const regionalQuery =
           facilityCategory === 'all'

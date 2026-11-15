@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { ActiveStrategySnapshot, ClientData, HealthCarrierId } from '../../types';
+import { AcaMetalTier, ActiveStrategySnapshot, ClientData, HealthCarrierId } from '../../types';
 import {
   getIRSLimitForAge,
   getHouseholdSize,
   getMarginalTaxRate,
-  calculateAcaDetails,
+  calculateAcaTierProjection,
   getTraditionalIRADeductionLimit,
 } from '../../utils/calculations';
 import { REGIONAL_HEALTH_CARRIERS } from '../../utils/constants';
@@ -45,17 +45,27 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
 
   const [iraContrib, setIraContrib] = useState<number>(Math.min(initialIRA, iraCap));
   const [spouseIraContrib, setSpouseIraContrib] = useState<number>(Math.min(initialSpouseIRA, spouseIraCap));
-  const [selectedTier, setSelectedTier] = useState<string>('auto');
+  const [selectedTier, setSelectedTier] = useState<AcaMetalTier>('silver');
   const [isScenariosOpen, setIsScenariosOpen] = useState<boolean>(false);
   const [isProviderMapOpen, setIsProviderMapOpen] = useState<boolean>(false);
   const [walkInDate, setWalkInDate] = useState<string>('2026-11-05');
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
+  const lastSnapshotJsonRef = useRef<string>('');
 
-  // Household & ACA Benchmark Details for Poverty Floor
+  // Household & ACA Benchmark Details for Poverty Floor (canonical year-aware & carrier-aware projection)
   const householdSize = getHouseholdSize(clientData.filingStatus, clientData.dependents);
-  const origAca = calculateAcaDetails(clientData.grossAGI, householdSize, clientData.clientAge);
+  const origProjection = calculateAcaTierProjection({
+    agi: clientData.grossAGI,
+    householdSize,
+    clientAge: clientData.clientAge,
+    carrierId: clientData.selectedHealthCarrier,
+    scenario: 'moderate',
+    taxYear: clientData.taxYear,
+  });
+  const origAca = origProjection.baseAca;
+  const origSilverTier = origProjection.tiers.silver;
 
   // Poverty floor for pre-tax deductions ($100 above 100% FPL)
   const povertyFloor = origAca.fpl100 + 100;
@@ -110,59 +120,57 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const marginalTaxRate = getMarginalTaxRate(clientData.grossAGI, clientData.filingStatus);
   const taxRelief = Math.round(annualContrib * marginalTaxRate);
 
-  // Adjusted ACA
+  // Adjusted ACA (identical canonical projection engine as Traditional ACA Dashboard)
   const adjustedMAGI =
     clientData.grossAGI <= povertyFloor
       ? clientData.grossAGI
       : Math.max(povertyFloor, clientData.grossAGI - totalPreTaxMAGIReduction);
-  const adjAca = calculateAcaDetails(adjustedMAGI, householdSize, clientData.clientAge);
+  const adjProjection = calculateAcaTierProjection({
+    agi: adjustedMAGI,
+    householdSize,
+    clientAge: clientData.clientAge,
+    carrierId: clientData.selectedHealthCarrier,
+    scenario: 'moderate',
+    taxYear: clientData.taxYear,
+  });
+  const adjAca = adjProjection.baseAca;
+  const activeTierData = adjProjection.tiers[selectedTier];
 
-  // Plan tier adjustments (Bronze / Silver / Gold)
-  let displayPlanName = adjAca.csrLevel;
-  let displayPrem = adjAca.netMonthlyPremium;
-  let displayDed = adjAca.deductible;
-  let displayOop = adjAca.oopMax;
-  let displayAv = adjAca.av;
-
-  if (selectedTier === 'bronze') {
-    displayPlanName = 'Bronze High-Deductible Tier';
-    displayPrem = Math.round(adjAca.netMonthlyPremium * 0.7);
-    displayDed = Math.round(adjAca.deductible > 0 ? adjAca.deductible * 2.2 : 7500);
-    displayOop = 9100;
-    displayAv = '60% Bronze';
-  } else if (selectedTier === 'silver') {
-    displayPlanName = 'Standard Silver (70% AV)';
-  } else if (selectedTier === 'gold') {
-    displayPlanName = 'Gold Preferred Copay Tier';
-    displayPrem = Math.round(adjAca.netMonthlyPremium * 1.5);
-    displayDed = Math.round(adjAca.deductible * 0.4);
-    displayAv = '80% Gold';
-  }
+  // Plan tier adjustments (Bronze / Silver Auto-CSR / Gold) matched 1:1 with Traditional ACA
+  const displayPlanName = activeTierData.title;
+  const displayPrem = activeTierData.monthlyPremium;
+  const displayDed = activeTierData.deductible;
+  const displayOop = activeTierData.applicableOopMax;
+  const displayAv = activeTierData.avLabel;
 
   const subsidyShiftAnnual = Math.max(0, (adjAca.monthlySubsidy - origAca.monthlySubsidy) * 12);
   const monthlyAptcGain = Math.max(0, adjAca.monthlySubsidy - origAca.monthlySubsidy);
-  const deductibleShield = Math.max(0, origAca.deductible - displayDed);
-  const oopShield = Math.max(0, origAca.oopMax - displayOop);
+  const deductibleShield = Math.max(0, origSilverTier.deductible - displayDed);
+  const oopShield = Math.max(0, origSilverTier.applicableOopMax - displayOop);
   const totalComprehensiveSavings = subsidyShiftAnnual + deductibleShield + taxRelief;
-  const totalComprehensiveAdvantage = annualContrib + taxRelief + deductibleShield + subsidyShiftAnnual;
+  const totalComprehensiveAdvantage = annualContrib + taxRelief + deductibleShield + subsidyShiftAnnual + oopShield;
   const netFinancialSwing = totalComprehensiveAdvantage;
 
-  // ACA CSR Tier Thresholds & Next-Tier Headroom
+  // ACA CSR Tier Thresholds & Next-Tier Headroom (exact unrounded FPL & dollar boundaries)
+  const cliffThreshold400 = origAca.fpl100 * 4;
   const csrThreshold250 = Math.round(origAca.fpl100 * 2.5);
   const csrThreshold200 = Math.round(origAca.fpl100 * 2.0);
   const csrThreshold150 = Math.round(origAca.fpl100 * 1.5);
   let nextCsrLabel = 'Max 94% Silver CSR Unlocked';
   let nextCsrDollarsNeeded = 0;
 
-  if (adjAca.fplPct > 250) {
+  if (adjAca.isAbove400Cliff) {
+    nextCsrLabel = `400% Cliff ($${cliffThreshold400.toLocaleString()}) for APTC`;
+    nextCsrDollarsNeeded = Math.max(1, Math.ceil(adjustedMAGI - cliffThreshold400));
+  } else if (adjAca.exactFplPct > 250) {
     nextCsrLabel = '73% Silver CSR (250% FPL)';
-    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold250);
-  } else if (adjAca.fplPct > 200) {
+    nextCsrDollarsNeeded = Math.max(1, adjustedMAGI - csrThreshold250);
+  } else if (adjAca.exactFplPct > 200) {
     nextCsrLabel = '87% Silver CSR (200% FPL)';
-    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold200);
-  } else if (adjAca.fplPct > 150) {
+    nextCsrDollarsNeeded = Math.max(1, adjustedMAGI - csrThreshold200);
+  } else if (adjAca.exactFplPct > 150) {
     nextCsrLabel = '94% Max Silver CSR (150% FPL)';
-    nextCsrDollarsNeeded = Math.max(0, adjustedMAGI - csrThreshold150);
+    nextCsrDollarsNeeded = Math.max(1, adjustedMAGI - csrThreshold150);
   }
 
   const famMult = householdSize > 1 ? 1.8 : 1.0;
@@ -211,7 +219,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
       { label: 'Preferred Walk-In / Consultation Date', value: walkInDate }
     );
 
-    onUpdateStrategySnapshot({
+    const nextSnapshot: ActiveStrategySnapshot = {
       pathId: 'atlasbridge',
       pathLabel: 'ACA + Atlasbridge System',
       summaryHeadline: `${displayPlanName} via ${currentCarrier.name} with $${combinedDeductibleIRA.toLocaleString()}/yr deductible MAGI reduction`,
@@ -224,10 +232,16 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
         { label: 'Deductible Trad-IRA MAGI Reduction', value: `$${combinedDeductibleIRA.toLocaleString()}/yr` },
         { label: 'Est. Monthly Net ACA Premium', value: `$${displayPrem}/mo (Deductible $${displayDed.toLocaleString()} | Max OOP $${displayOop.toLocaleString()})` },
         { label: 'Additional Annual ACA Subsidy (APTC)', value: `+$${subsidyShiftAnnual.toLocaleString()}/yr (+$${monthlyAptcGain.toLocaleString()}/mo)` },
+        { label: 'Deductible & Max OOP Protection Saved', value: `-$${deductibleShield.toLocaleString()} Deductible | -$${oopShield.toLocaleString()} Max OOP Cap` },
         { label: 'Direct IRS Income Tax Savings', value: `+$${taxRelief.toLocaleString()}/yr (${Math.round(marginalTaxRate * 100)}% bracket)` },
         { label: 'Total Comprehensive Financial Advantage', value: `+$${totalComprehensiveAdvantage.toLocaleString()}/yr` },
       ],
-    });
+    };
+
+    const serialized = JSON.stringify(nextSnapshot);
+    if (serialized === lastSnapshotJsonRef.current) return;
+    lastSnapshotJsonRef.current = serialized;
+    onUpdateStrategySnapshot(nextSnapshot);
   }, [
     onUpdateStrategySnapshot,
     clientData.taxYear,
@@ -246,6 +260,8 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
     displayPrem,
     displayDed,
     displayOop,
+    deductibleShield,
+    oopShield,
     subsidyShiftAnnual,
     monthlyAptcGain,
     taxRelief,
@@ -271,7 +287,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
         datasets: [
           {
             label: 'Old Fashioned Way',
-            data: [legacyAnnualPrem, origAca.deductible, 0, origAca.oopMax],
+            data: [legacyAnnualPrem, origSilverTier.deductible, 0, origSilverTier.applicableOopMax],
             backgroundColor: '#ef4444',
           },
           {
@@ -315,10 +331,10 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
     isScenariosOpen,
     legacyAnnualPrem,
     atlasAnnualPrem,
-    origAca.deductible,
+    origSilverTier.deductible,
     displayDed,
     subsidyShiftAnnual,
-    origAca.oopMax,
+    origSilverTier.applicableOopMax,
     displayOop,
   ]);
 
@@ -409,10 +425,10 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                     }}
                     className="w-full h-2 bg-navy-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
                   />
-                  <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium px-0.5">
+                  <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium px-0.5 tabular-nums">
                     <span>$0 Min</span>
-                    <span>IRS Form 1040 Base</span>
-                    <span>$250,000+ Max</span>
+                    <span>100% FPL: ${origAca.fpl100.toLocaleString()}</span>
+                    <span>400% Cliff: ${(origAca.fpl100 * 4).toLocaleString()}</span>
                   </div>
                 </div>
 
@@ -466,10 +482,10 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   {/* Silver CSR Tier Progression Strip */}
                   <div className="grid grid-cols-4 gap-1.5 text-center text-[9.5px]">
                     {[
-                      { label: 'Std 70%', threshold: '>250%', active: adjAca.fplPct > 250 },
-                      { label: '73% CSR', threshold: '≤250%', active: adjAca.fplPct > 200 && adjAca.fplPct <= 250 },
-                      { label: '87% CSR', threshold: '≤200%', active: adjAca.fplPct > 150 && adjAca.fplPct <= 200 },
-                      { label: '94% CSR', threshold: '≤150%', active: adjAca.fplPct <= 150 },
+                      { label: 'Std 70%', threshold: '>250%', active: adjAca.exactFplPct > 250 },
+                      { label: '73% CSR', threshold: '≤250%', active: adjAca.exactFplPct > 200 && adjAca.exactFplPct <= 250 },
+                      { label: '87% CSR', threshold: '≤200%', active: adjAca.exactFplPct > 150 && adjAca.exactFplPct <= 200 },
+                      { label: '94% CSR', threshold: '≤150%', active: !adjAca.isBelow100Fpl && adjAca.exactFplPct <= 150 },
                     ].map((tier) => (
                       <div
                         key={tier.label}
@@ -504,7 +520,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   {/* Next Threshold / Cliff Headroom */}
                   <div className="flex items-center justify-between text-[10px] pt-1 border-t border-navy-800/80">
                     <span className="text-slate-400">
-                      {adjAca.fplPct <= 138
+                      {adjAca.exactFplPct <= 138
                         ? 'Medicaid Threshold Range (≤138% FPL)'
                         : nextCsrDollarsNeeded > 0
                         ? `To ${nextCsrLabel}:`
@@ -570,7 +586,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                           type="number"
                           min="0"
                           max={effectiveMaxClientIRA}
-                          step="50"
+                          step="1"
                           value={actualClientIRA}
                           onChange={(e) => {
                             const val = parseFloat(e.target.value) || 0;
@@ -585,7 +601,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                       type="range"
                       min="0"
                       max={effectiveMaxClientIRA}
-                      step="50"
+                      step="10"
                       value={actualClientIRA}
                       onChange={(e) => {
                         const val = parseFloat(e.target.value) || 0;
@@ -615,7 +631,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                             type="number"
                             min="0"
                             max={effectiveMaxSpouseIRA}
-                            step="50"
+                            step="1"
                             value={actualSpouseIRA}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
@@ -630,7 +646,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                         type="range"
                         min="0"
                         max={effectiveMaxSpouseIRA}
-                        step="50"
+                        step="10"
                         value={actualSpouseIRA}
                         onChange={(e) => {
                           const val = parseFloat(e.target.value) || 0;
@@ -785,14 +801,13 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   value={selectedTier}
                   onChange={(e) => {
                     SoundFX.playClick();
-                    setSelectedTier(e.target.value);
+                    setSelectedTier(e.target.value as AcaMetalTier);
                   }}
-                  className="bg-navy-950 text-xs font-bold text-white px-2.5 py-1 rounded border border-navy-700 focus:outline-none focus:border-blue-500 cursor-pointer max-w-[170px] sm:max-w-[190px]"
+                  className="bg-navy-950 text-xs font-bold text-white px-2.5 py-1 rounded border border-navy-700 focus:outline-none focus:border-blue-500 cursor-pointer max-w-[190px] sm:max-w-[220px]"
                 >
-                  <option value="auto" className="bg-navy-900 text-white">Auto-Matched Recommended Tier</option>
-                  <option value="bronze" className="bg-navy-900 text-white">Bronze Plan</option>
-                  <option value="silver" className="bg-navy-900 text-white">Standard Silver (70% AV)</option>
-                  <option value="gold" className="bg-navy-900 text-white">Gold Plan</option>
+                  <option value="bronze" className="bg-navy-900 text-white">Bronze Plan (60% AV)</option>
+                  <option value="silver" className="bg-navy-900 text-white">Silver Plan (Auto-CSR Matched)</option>
+                  <option value="gold" className="bg-navy-900 text-white">Gold Plan (80% AV)</option>
                 </select>
               </div>
 
@@ -818,23 +833,33 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-1">
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Monthly ACA Premium</span>
-              <div className="text-base sm:text-lg font-black text-white">${displayPrem} / mo</div>
-              <div className="text-[10px] text-emerald-400">APTC Subsidy Active</div>
+              <div className="text-base sm:text-lg font-black text-white tabular-nums">${displayPrem.toLocaleString()} / mo</div>
+              <div className={`text-[10px] tabular-nums ${adjAca.monthlySubsidy > 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
+                {adjAca.monthlySubsidy > 0
+                  ? `+$${adjAca.monthlySubsidy.toLocaleString()}/mo APTC Active`
+                  : adjAca.isBelow100Fpl
+                  ? '$0 APTC (Below 100% FPL)'
+                  : '$0 APTC (Over 400% Cliff)'}
+              </div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Family/Ind. Deductible</span>
-              <div className="text-base sm:text-lg font-black text-blue-400">${displayDed.toLocaleString()} / yr</div>
-              <div className="text-[10px] text-slate-400">CSR Reduced</div>
+              <div className="text-base sm:text-lg font-black text-blue-400 tabular-nums">${displayDed.toLocaleString()} / yr</div>
+              <div className="text-[10px] text-slate-400">
+                {selectedTier === 'silver' && !adjAca.isBelow100Fpl && adjAca.exactFplPct <= 250
+                  ? 'Auto-CSR Reduced'
+                  : `${clientData.taxYear} Plan Year`}
+              </div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Max Out-of-Pocket</span>
-              <div className="text-base sm:text-lg font-black text-purple-300">${displayOop.toLocaleString()} / yr</div>
-              <div className="text-[10px] text-slate-400">Protection Cap</div>
+              <div className="text-base sm:text-lg font-black text-purple-300 tabular-nums">${displayOop.toLocaleString()} / yr</div>
+              <div className="text-[10px] text-slate-400">{clientData.taxYear} {adjAca.isFamily ? 'Family' : 'Ind.'} Cap</div>
             </div>
             <div className="bg-navy-900/80 p-3 rounded-lg border border-navy-700/60 space-y-1">
               <span className="text-[10px] uppercase font-semibold text-slate-400">Actuarial Value (AV)</span>
               <div className="text-base sm:text-lg font-black text-gold-400">{displayAv}</div>
-              <div className="text-[10px] text-slate-400">~{adjAca.fplPct}% FPL</div>
+              <div className="text-[10px] text-slate-400 tabular-nums">~{adjAca.fplPct}% FPL</div>
             </div>
           </div>
 
@@ -1064,25 +1089,29 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                 <div className="space-y-2.5 text-xs">
                   <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
                     <span className="text-slate-300 font-semibold">1. Pre-Tax Wealth Built:</span>
-                    <strong className="text-emerald-400 font-extrabold text-sm">${annualContrib.toLocaleString()}</strong>
+                    <strong className="text-emerald-400 font-extrabold text-sm tabular-nums">${annualContrib.toLocaleString()}</strong>
                   </div>
                   <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
                     <span className="text-slate-300 font-semibold">2. Direct IRS Tax Relief:</span>
-                    <strong className="text-gold-400 font-extrabold text-sm">${taxRelief.toLocaleString()}</strong>
+                    <strong className="text-gold-400 font-extrabold text-sm tabular-nums">${taxRelief.toLocaleString()}</strong>
                   </div>
                   <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
                     <span className="text-slate-300 font-semibold">3. Deductible Risk Saved:</span>
-                    <strong className="text-purple-300 font-extrabold text-sm">${deductibleShield.toLocaleString()}</strong>
+                    <strong className="text-purple-300 font-extrabold text-sm tabular-nums">${deductibleShield.toLocaleString()}</strong>
                   </div>
                   <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
                     <span className="text-slate-300 font-semibold">4. APTC Premium Subsidy Gained:</span>
-                    <strong className="text-cyan-400 font-extrabold text-sm">${subsidyShiftAnnual.toLocaleString()}</strong>
+                    <strong className="text-cyan-400 font-extrabold text-sm tabular-nums">${subsidyShiftAnnual.toLocaleString()}</strong>
+                  </div>
+                  <div className="flex justify-between items-center bg-navy-950/80 p-2.5 rounded-lg border border-navy-800">
+                    <span className="text-slate-300 font-semibold">5. Max Out-of-Pocket (OOP) Risk Saved:</span>
+                    <strong className="text-blue-400 font-extrabold text-sm tabular-nums">${oopShield.toLocaleString()}</strong>
                   </div>
                 </div>
 
                 <div className="pt-3 border-t border-navy-800 flex justify-between items-center">
                   <span className="text-xs text-slate-200 font-bold">Total Net Financial Advantage:</span>
-                  <strong className="text-emerald-400 font-black text-base whitespace-nowrap">
+                  <strong className="text-emerald-400 font-black text-base whitespace-nowrap tabular-nums">
                     +${totalComprehensiveAdvantage.toLocaleString()} / yr
                   </strong>
                 </div>

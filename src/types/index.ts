@@ -18,9 +18,47 @@ export type LifeCarrier =
   | 'Pacific Life'
   | 'Principal';
 
-export type HealthCarrierId = 'oscar' | 'fl_blue' | 'ambetter' | 'fhcp' | 'aetna' | 'uhc';
+export type HealthCarrierId = 'oscar' | 'fl_blue' | 'ambetter' | 'fhcp' | 'molina' | 'uhc';
 
 export type LifeTabType = 'term' | 'whole' | 'universal' | 'other';
+
+export type LifePolicySubtype =
+  | 'term_10'
+  | 'term_20'
+  | 'term_30'
+  | 'whole_standard'
+  | 'whole_paid_up'
+  | 'iul'
+  | 'vul'
+  | 'gul'
+  | 'key_person'
+  | 'buy_sell'
+  | 'exec_bonus'
+  | 'final_expense';
+
+export type LifeRiderKey =
+  | 'waiver'
+  | 'adb'
+  | 'rop'
+  | 'guaranteed'
+  | 'accidental'
+  | 'pua_rider'
+  | 'overloan'
+  | 'business_key';
+
+export interface LifeRiderDefinition {
+  key: LifeRiderKey;
+  defaultName: string;
+  defaultDesc: string;
+  costWeightPct: number;
+  eligibleCarriers: LifeCarrier[];
+  eligibleSubtypes: LifePolicySubtype[];
+  labelByTab?: Partial<Record<LifeTabType, { name: string; desc: string }>>;
+  carrierNote?: Partial<Record<LifeCarrier, string>>;
+}
+
+export type AcaMetalTier = 'bronze' | 'silver' | 'gold';
+export type UtilizationScenarioId = 'low' | 'moderate' | 'catastrophic';
 
 export type StrategyPathId =
   | 'atlasbridge'

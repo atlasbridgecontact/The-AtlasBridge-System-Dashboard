@@ -1,4 +1,12 @@
-import { CarrierStatProfile, HealthCarrierInfo, StrategyPathConfig } from '../types';
+import {
+  CarrierStatProfile,
+  HealthCarrierInfo,
+  LifeCarrier,
+  LifePolicySubtype,
+  LifeRiderDefinition,
+  LifeTabType,
+  StrategyPathConfig,
+} from '../types';
 
 export const COLOR_HEX_MAP: Record<string, string> = {
   blue: '#60a5fa',
@@ -69,7 +77,7 @@ export const REGIONAL_HEALTH_CARRIERS: HealthCarrierInfo[] = [
   {
     id: 'fl_blue',
     name: 'Florida Blue (BlueCross)',
-    category: 'Silver Essential / Gold Preferred PPO',
+    category: 'Silver Essential / Gold Preferred PPO & HMO',
     note: 'Largest Local Hospital Network',
     directoryUrl: 'https://www.floridablue.com/find-a-doctor',
     networkSearchHint: 'hospital primary care medical center urgent care',
@@ -88,19 +96,19 @@ export const REGIONAL_HEALTH_CARRIERS: HealthCarrierInfo[] = [
     id: 'fhcp',
     name: 'Florida Health Care Plans (FHCP)',
     category: 'Standard Silver (70% AV) & Gold Copay',
-    note: 'Top Value HMO & Integrated DPC',
+    note: 'Top Value HMO & Integrated Care',
     directoryUrl: 'https://www.fhcp.com/find-a-provider/',
     networkSearchHint: 'medical center primary care clinic urgent care',
     carrierQueries: ['Florida Health Care Plans care center', 'primary care medical center urgent care'],
   },
   {
-    id: 'aetna',
-    name: 'Aetna CVS Health',
-    category: 'Gold Copay & Silver CarePass',
-    note: 'Best MinuteClinic & Retail Value',
-    directoryUrl: 'https://www.aetna.com/individuals-families/find-a-doctor.html',
-    networkSearchHint: 'CVS MinuteClinic primary care clinic urgent care',
-    carrierQueries: ['CVS MinuteClinic HealthHUB', 'primary care urgent care hospital'],
+    id: 'molina',
+    name: 'Molina Healthcare of Florida',
+    category: 'Constant Care Silver & Core Care Bronze',
+    note: 'Competitive CSR Silver Value (Active 2026+)',
+    directoryUrl: 'https://www.molinamarketplace.com/marketplace/fl/en-us/Find-a-Doctor',
+    networkSearchHint: 'primary care clinic urgent care community health medical center',
+    carrierQueries: ['Molina Healthcare primary care clinic', 'community health urgent care medical center'],
   },
   {
     id: 'uhc',
@@ -127,3 +135,135 @@ export const ALL_PATHS: StrategyPathConfig[] = [
 ];
 
 export const TAX_YEAR_PARAMS_2027 = { baseFPL: 15960, perAddFPL: 5680 };
+
+/**
+ * Carrier x Policy-Subtype Rider Compatibility Catalog
+ * Ensures every rendered rider is genuinely issueable on the selected carrier + policy structure.
+ */
+export const LIFE_RIDER_CATALOG: LifeRiderDefinition[] = [
+  {
+    key: 'waiver',
+    defaultName: 'Waiver of Premium Rider',
+    defaultDesc: 'Waives base premiums during qualifying total disability (6-mo elimination period, typically up to age 60/65)',
+    costWeightPct: 6,
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial', 'Lincoln Financial', 'Pacific Life', 'Principal'],
+    eligibleSubtypes: ['term_10', 'term_20', 'term_30', 'whole_standard', 'whole_paid_up', 'iul', 'vul', 'gul', 'key_person', 'buy_sell', 'exec_bonus'],
+    labelByTab: {
+      term: {
+        name: 'Waiver of Premium (Term)',
+        desc: 'Available on 10/20/30-Yr Term: waives monthly premiums if totally disabled before age 60/65',
+      },
+      whole: {
+        name: 'Waiver of Premium (Whole Life)',
+        desc: 'Keeps permanent Whole Life & dividend growth in force with $0 premiums during total disability',
+      },
+      universal: {
+        name: 'Waiver of Monthly Deductions',
+        desc: 'Waives monthly COI & policy expense charges on Universal/IUL/VUL during total disability',
+      },
+      other: {
+        name: 'Waiver of Premium (Business)',
+        desc: 'Preserves Key-Person / Executive coverage automatically if insured becomes totally disabled',
+      },
+    },
+    carrierNote: {
+      'Pacific Life': 'Standard on PL Promise Term & UL portfolios (ages 18–59)',
+      'Mutual of Omaha': 'Available on Term Life Express/Answers & IUL (issue ages 18–55)',
+      'Corebridge Financial': 'Select-a-Term & QoL Max Accumulator Waiver Rider available',
+    },
+  },
+  {
+    key: 'adb',
+    defaultName: 'Accelerated Death Benefit (Living Benefits)',
+    defaultDesc: 'Early tax-free benefit acceleration for Terminal, Chronic, or Critical illness diagnosis',
+    costWeightPct: 5,
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial', 'Lincoln Financial', 'Pacific Life', 'Principal'],
+    eligibleSubtypes: ['term_10', 'term_20', 'term_30', 'whole_standard', 'whole_paid_up', 'iul', 'vul', 'gul', 'key_person', 'buy_sell', 'exec_bonus', 'final_expense'],
+    labelByTab: {
+      other: {
+        name: 'Accelerated Death Benefit',
+        desc: 'Terminal illness acceleration included across Final Expense & Corporate policies; Chronic/Critical varies by state',
+      },
+    },
+    carrierNote: {
+      'Corebridge Financial': 'QoL Flex Term & IUL include Terminal, Chronic & Critical Living Benefits',
+      'Mutual of Omaha': 'Living Promise Final Expense provides Terminal/Nursing Home acceleration',
+    },
+  },
+  {
+    key: 'rop',
+    defaultName: 'Return of Premium (ROP) Rider',
+    defaultDesc: 'Refunds 100% of base level term premiums tax-free at the end of the 20- or 30-year level period',
+    costWeightPct: 9,
+    // Strictly available on 20/30-Yr Term and only through carriers issuing ROP term riders
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial'],
+    eligibleSubtypes: ['term_20', 'term_30'],
+    carrierNote: {
+      'Mutual of Omaha': 'Eligible on 20-Yr and 30-Yr Term Life Answers structures',
+      'Corebridge Financial': 'Available on Select-a-Term 20/30-Yr structures (ROP endowment)',
+    },
+  },
+  {
+    key: 'guaranteed',
+    defaultName: 'Guaranteed Insurability Rider (GIR)',
+    defaultDesc: 'Option to purchase additional death benefit tranches at milestone ages/events without medical underwriting',
+    costWeightPct: 5,
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial', 'Lincoln Financial', 'Principal'],
+    eligibleSubtypes: ['term_20', 'term_30', 'whole_standard', 'whole_paid_up', 'iul', 'vul', 'buy_sell', 'exec_bonus'],
+    carrierNote: {
+      'Mutual of Omaha': 'Guaranteed Insurability / Term Conversion upgrade without new labs',
+      'Principal': 'Benefit Increase / Executive Insurability Purchase Option available',
+    },
+  },
+  {
+    key: 'accidental',
+    defaultName: 'Accidental Death Benefit (ADB)',
+    defaultDesc: 'Adds supplemental lump-sum indemnity payout if death results directly from a qualifying accident',
+    costWeightPct: 4,
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial', 'Lincoln Financial', 'Principal'],
+    eligibleSubtypes: ['term_10', 'term_20', 'term_30', 'whole_standard', 'whole_paid_up', 'iul', 'final_expense'],
+  },
+  {
+    key: 'pua_rider',
+    defaultName: 'Paid-Up Additions (PUA) Rider',
+    defaultDesc: 'Injects supplemental paid-up death benefit & front-loads guaranteed dividend compounding cash value',
+    costWeightPct: 8,
+    eligibleCarriers: ['Mutual of Omaha', 'Lincoln Financial', 'Principal'],
+    eligibleSubtypes: ['whole_standard', 'whole_paid_up'],
+  },
+  {
+    key: 'overloan',
+    defaultName: 'Overloan Protection Rider',
+    defaultDesc: 'Automatically locks policy from lapsing due to tax-free IRC § 7702 retirement income policy loans',
+    costWeightPct: 4,
+    // Strictly cash-value Universal/IUL/VUL & Sec 162 permanent funding — never Term, GUL, or Final Expense
+    eligibleCarriers: ['Mutual of Omaha', 'Corebridge Financial', 'Lincoln Financial', 'Pacific Life', 'Principal'],
+    eligibleSubtypes: ['iul', 'vul', 'exec_bonus'],
+  },
+  {
+    key: 'business_key',
+    defaultName: 'Change of Insured / Key-Person Rider',
+    defaultDesc: 'Allows corporate policy ownership transfer or key-employee substitution without surrender penalties',
+    costWeightPct: 5,
+    eligibleCarriers: ['Corebridge Financial', 'Lincoln Financial', 'Pacific Life', 'Principal'],
+    eligibleSubtypes: ['key_person', 'buy_sell', 'exec_bonus', 'iul', 'vul', 'gul'],
+  },
+];
+
+export function getCompatibleLifeRiders(
+  carrier: LifeCarrier,
+  tab: LifeTabType,
+  subtype: LifePolicySubtype
+): Array<LifeRiderDefinition & { resolvedName: string; resolvedDesc: string; resolvedNote?: string }> {
+  return LIFE_RIDER_CATALOG.filter(
+    (r) => r.eligibleCarriers.includes(carrier) && r.eligibleSubtypes.includes(subtype)
+  ).map((r) => {
+    const tabOverride = r.labelByTab?.[tab];
+    return {
+      ...r,
+      resolvedName: tabOverride?.name || r.defaultName,
+      resolvedDesc: tabOverride?.desc || r.defaultDesc,
+      resolvedNote: r.carrierNote?.[carrier],
+    };
+  });
+}

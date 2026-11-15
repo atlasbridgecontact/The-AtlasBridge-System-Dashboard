@@ -10,7 +10,7 @@ import {
   StrategyPathId,
 } from './types';
 import { ALL_PATHS } from './utils/constants';
-import { getHouseholdSize, get100PercentFPL, isOutsideAcaEnrollmentWindow } from './utils/calculations';
+import { formatBoundaryAwareFpl, getHouseholdSize, get100PercentFPL, isOutsideAcaEnrollmentWindow } from './utils/calculations';
 import { SoundFX } from './utils/audio';
 
 import { Header } from './components/Header';
@@ -111,8 +111,9 @@ export default function App() {
     setClientData((prev) => {
       const merged = { ...prev, ...updates };
       const householdSize = getHouseholdSize(merged.filingStatus, merged.dependents);
-      const fpl100 = get100PercentFPL(householdSize);
-      const fplPct = Math.round((merged.grossAGI / fpl100) * 100);
+      const fpl100 = get100PercentFPL(householdSize, merged.taxYear);
+      const exactFplPct = fpl100 > 0 ? (merged.grossAGI / fpl100) * 100 : 0;
+      const fplPct = formatBoundaryAwareFpl(exactFplPct);
       return {
         ...merged,
         householdSize,
@@ -130,12 +131,13 @@ export default function App() {
 
   const handleEvaluateEligibility = () => {
     const currentHouseholdSize = getHouseholdSize(clientData.filingStatus, clientData.dependents);
-    const currentFpl100 = get100PercentFPL(currentHouseholdSize);
-    const currentFplPct = Math.round((clientData.grossAGI / currentFpl100) * 100);
+    const currentFpl100 = get100PercentFPL(currentHouseholdSize, clientData.taxYear);
+    const currentExactFplPct = currentFpl100 > 0 ? (clientData.grossAGI / currentFpl100) * 100 : 0;
+    const currentFplPct = formatBoundaryAwareFpl(currentExactFplPct);
 
     const isHighIncome =
       (clientData.filingStatus === 'married' ? clientData.grossAGI > 200000 : clientData.grossAGI > 150000) ||
-      currentFplPct > 500;
+      currentExactFplPct > 500;
     const isOutsideWindow = isOutsideAcaEnrollmentWindow(clientData.acaWindow);
     const hasEmployerAffordable = clientData.employerGroup === 'yes_affordable';
     const isBusinessWithEmployees = Boolean(clientData.ownsBusiness && clientData.w2Employees >= 1);
@@ -173,7 +175,7 @@ export default function App() {
           unlocked.push('traditional_aca');
         }
       } else {
-        if (!isHighIncome && currentFplPct <= 500) {
+        if (!isHighIncome && currentExactFplPct <= 500) {
           unlocked.push('atlasbridge');
         }
         if (selfEmployedCanReachAca) {
@@ -247,7 +249,7 @@ export default function App() {
 
     setIsWizardCompleted(true);
     setIsWizardOpen(false);
-    setShowMedicaidModal(currentFplPct <= 138);
+    setShowMedicaidModal(currentExactFplPct <= 138);
     SoundFX.playUnlock();
 
     // Trigger celebration confetti
@@ -393,6 +395,7 @@ export default function App() {
             eligiblePathIds={eligiblePathIds}
             activePathId={activePathId}
             onSelectPath={(pathId) => {
+              setEligiblePathIds((prev) => (prev.includes(pathId) ? prev : [...prev, pathId]));
               setActivePathId(pathId);
               scrollToTopInstant();
             }}

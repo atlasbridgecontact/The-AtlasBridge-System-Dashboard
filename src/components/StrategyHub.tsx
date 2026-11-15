@@ -208,6 +208,7 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
             onChangeClientData={onChangeClientData}
             onOpenBooking={onOpenBooking}
             onUpdateStrategySnapshot={onUpdateStrategySnapshot}
+            onNavigateToPrivateHealth={() => onSelectPath('private_health')}
           />
         )}
         {activePathId === 'private_health' && (

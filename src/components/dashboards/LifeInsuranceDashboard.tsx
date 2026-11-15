@@ -1,7 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { ActiveStrategySnapshot, ClientData, LifeCarrier, LifeTabType } from '../../types';
-import { CARRIER_STAT_PROFILES } from '../../utils/constants';
+import {
+  ActiveStrategySnapshot,
+  ClientData,
+  LifeCarrier,
+  LifePolicySubtype,
+  LifeRiderKey,
+  LifeTabType,
+} from '../../types';
+import { CARRIER_STAT_PROFILES, getCompatibleLifeRiders } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
 
 Chart.register(...registerables);
@@ -24,11 +31,11 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
     Math.min(5000000, Math.max(25000, clientData.grossAGI * 10 || 500000))
   );
   const [timeHorizon, setTimeHorizon] = useState<number>(20);
-  const [riderBudget, setRiderBudget] = useState<number>(18);
+  const [riderBudget, setRiderBudget] = useState<number>(5);
   const [selectedOther, setSelectedOther] = useState<string>('key_person');
-  const [subPolicyType, setSubPolicyType] = useState<string>('term_20');
+  const [subPolicyType, setSubPolicyType] = useState<LifePolicySubtype>('term_20');
 
-  const [riders, setRiders] = useState<Record<string, boolean>>({
+  const [riders, setRiders] = useState<Record<LifeRiderKey, boolean>>({
     waiver: false,
     adb: true,
     rop: false,
@@ -38,6 +45,32 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
     overloan: false,
     business_key: false,
   });
+
+  const compatibleRiders = useMemo(
+    () => getCompatibleLifeRiders(selectedCarrier, activeTab, subPolicyType),
+    [selectedCarrier, activeTab, subPolicyType]
+  );
+
+  // Automatically clear any incompatible riders & recalculate riderBudget when carrier or policy structure changes
+  useEffect(() => {
+    const eligibleKeys = new Set(compatibleRiders.map((r) => r.key));
+    setRiders((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      (Object.keys(next) as LifeRiderKey[]).forEach((k) => {
+        if (next[k] && !eligibleKeys.has(k)) {
+          next[k] = false;
+          changed = true;
+        }
+      });
+      const recomputedBudget = Math.min(
+        35,
+        compatibleRiders.reduce((sum, r) => (next[r.key] ? sum + r.costWeightPct : sum), 0)
+      );
+      setRiderBudget(recomputedBudget);
+      return changed ? next : prev;
+    });
+  }, [compatibleRiders]);
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
@@ -86,29 +119,29 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
 
   const livingBenefitAmount = Math.round(deathBenefit * 0.8);
 
-  const handleRiderCheckbox = (key: string, checked: boolean) => {
+  const handleRiderCheckbox = (key: LifeRiderKey, checked: boolean) => {
     SoundFX.playClick();
     const updated = { ...riders, [key]: checked };
     setRiders(updated);
-    let count = 0;
-    Object.values(updated).forEach((val) => {
-      if (val) count += 6;
-    });
-    setRiderBudget(Math.min(35, count));
+    const totalPct = compatibleRiders.reduce(
+      (sum, r) => (updated[r.key] ? sum + r.costWeightPct : sum),
+      0
+    );
+    setRiderBudget(Math.min(35, totalPct));
   };
 
   useEffect(() => {
     if (!onUpdateStrategySnapshot) return;
-    const activeRiderKeys = Object.entries(riders)
-      .filter(([, checked]) => checked)
-      .map(([k]) => k)
+    const activeRiderNames = compatibleRiders
+      .filter((r) => riders[r.key])
+      .map((r) => r.resolvedName)
       .join(', ');
     const sliders: Array<{ label: string; value: string }> = [
       { label: 'Coverage Category Tab', value: activeTab.toUpperCase() },
       { label: 'Preferred Life Carrier', value: selectedCarrier },
       { label: 'Policy Structure / Subtype', value: subPolicyType },
       { label: 'Desired Death Benefit (Slider)', value: `$${deathBenefit.toLocaleString()}` },
-      { label: 'Rider Protection Intensity', value: `+${Math.round(riderBudget)}% (${activeRiderKeys || 'Standard Living Benefits'})` },
+      { label: 'Verified Eligible Riders Selected', value: `+${Math.round(riderBudget)}% (${activeRiderNames || 'Base Policy Only'})` },
     ];
     if (activeTab === 'universal') {
       sliders.push({ label: 'Index Crediting Strategy', value: selectedCrediting });
@@ -143,6 +176,7 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
     timeHorizon,
     riderBudget,
     riders,
+    compatibleRiders,
     monthlyPrem,
     estCashValue,
     livingBenefitAmount,
@@ -248,6 +282,7 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
               SoundFX.playClick();
               setActiveTab('term');
               setSubPolicyType('term_20');
+              setTimeHorizon(20);
             }}
             className={`flex-1 min-w-[110px] py-3 px-4 rounded-xl font-extrabold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
               activeTab === 'term'
@@ -289,7 +324,7 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
             onClick={() => {
               SoundFX.playClick();
               setActiveTab('other');
-              setSubPolicyType(selectedOther);
+              setSubPolicyType(selectedOther as LifePolicySubtype);
             }}
             className={`flex-1 min-w-[110px] py-3 px-4 rounded-xl font-extrabold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
               activeTab === 'other'
@@ -374,7 +409,7 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
                     onClick={() => {
                       SoundFX.playClick();
                       setSelectedOther(opt.key);
-                      setSubPolicyType(opt.key);
+                      setSubPolicyType(opt.key as LifePolicySubtype);
                     }}
                     className={`p-3 rounded-xl cursor-pointer transition space-y-1 ${
                       selectedOther === opt.key
@@ -426,7 +461,14 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
               <label className="block text-xs text-slate-300 font-semibold">Policy Type:</label>
               <select
                 value={subPolicyType}
-                onChange={(e) => setSubPolicyType(e.target.value)}
+                onChange={(e) => {
+                  const nextSubtype = e.target.value as LifePolicySubtype;
+                  SoundFX.playClick();
+                  setSubPolicyType(nextSubtype);
+                  if (nextSubtype === 'term_10') setTimeHorizon(10);
+                  else if (nextSubtype === 'term_20') setTimeHorizon(20);
+                  else if (nextSubtype === 'term_30') setTimeHorizon(30);
+                }}
                 className="w-full bg-navy-900 text-xs font-bold text-white px-3 py-2.5 rounded-lg border border-navy-700 focus:border-gold-500 cursor-pointer"
               >
                 {activeTab === 'term' && (
@@ -674,20 +716,27 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-navy-800 pb-3">
             <div>
               <h4 className="text-xs font-extrabold text-red-400 uppercase tracking-wider flex items-center gap-2">
-                <i className="fa-solid fa-sliders text-xs"></i> Optional Riders &amp; Enhancement Selector
+                <i className="fa-solid fa-sliders text-xs"></i> Compatible Riders &amp; Underwriting Enhancements
               </h4>
-              <p className="text-[11px] text-slate-400">Rider protection intensity is directly 1:1 synced with the Rider Cost Multiplier.</p>
+              <p className="text-[11px] text-slate-400">
+                Dynamically filtered for <strong className="text-slate-200">{selectedCarrier}</strong> · <strong className="text-red-300 uppercase">{subPolicyType.replace('_', ' ')}</strong> — incompatible riders are automatically hidden.
+              </p>
             </div>
-            <div className="bg-navy-900 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs flex items-center gap-2">
-              <span className="text-slate-400">Rider Cost Multiplier:</span>
-              <strong className="text-red-400 font-extrabold">+{Math.round(riderBudget)}%</strong>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10.5px] font-bold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg tabular-nums">
+                {compatibleRiders.length} Eligible Riders
+              </span>
+              <div className="bg-navy-900 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs flex items-center gap-2">
+                <span className="text-slate-400">Rider Cost Multiplier:</span>
+                <strong className="text-red-400 font-extrabold tabular-nums">+{Math.round(riderBudget)}%</strong>
+              </div>
             </div>
           </div>
 
           <div className="space-y-1.5">
             <div className="flex justify-between items-center text-xs">
               <span className="text-slate-300 font-semibold">Rider Protection Intensity Slider:</span>
-              <span className="text-red-400 font-bold">
+              <span className="text-red-400 font-bold tabular-nums">
                 +{Math.round(riderBudget)}% Rider Cost Multiplier (
                 {riderBudget < 10 ? 'Standard' : riderBudget < 25 ? 'Enhanced' : 'Maximum Protection'})
               </span>
@@ -708,27 +757,35 @@ export const LifeInsuranceDashboard: React.FC<LifeInsuranceDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-            {[
-              { key: 'waiver', name: 'Waiver of Premium', desc: 'Waives premiums upon total disability' },
-              { key: 'adb', name: 'Accelerated Death Benefit', desc: 'Critical / Chronic / Terminal access' },
-              { key: 'rop', name: 'Return of Premium (ROP)', desc: 'Refunds 100% of base premiums at term end' },
-              { key: 'guaranteed', name: 'Guaranteed Insurability', desc: 'Add coverage without medical exam' },
-              { key: 'accidental', name: 'Accidental Death Benefit', desc: 'Double indemnity on accidental death' },
-              { key: 'overloan', name: 'Overloan Protection', desc: 'Prevents policy lapse from outstanding loans' },
-            ].map((r) => (
+            {compatibleRiders.map((r) => (
               <label
                 key={r.key}
-                className="flex items-center gap-2.5 bg-navy-900 p-3 rounded-xl border border-navy-800 hover:border-red-500/50 cursor-pointer transition"
+                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition ${
+                  riders[r.key]
+                    ? 'bg-navy-900 border-red-500/60 shadow-sm'
+                    : 'bg-navy-900/70 border-navy-800 hover:border-red-500/40'
+                }`}
               >
                 <input
                   type="checkbox"
                   checked={!!riders[r.key]}
                   onChange={(e) => handleRiderCheckbox(r.key, e.target.checked)}
-                  className="rounded border-navy-700 bg-navy-950 text-red-500 focus:ring-red-500 cursor-pointer"
+                  className="mt-0.5 rounded border-navy-700 bg-navy-950 text-red-500 focus:ring-red-500 cursor-pointer shrink-0"
                 />
-                <div className="text-xs">
-                  <strong className="text-white block">{r.name}</strong>
-                  <span className="text-[10px] text-slate-400">{r.desc}</span>
+                <div className="text-xs space-y-0.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-white leading-tight">{r.resolvedName}</strong>
+                    <span className="text-[10px] font-bold text-red-300 bg-red-500/10 border border-red-500/25 px-1.5 py-0.2 rounded tabular-nums shrink-0">
+                      +{r.costWeightPct}%
+                    </span>
+                  </div>
+                  <span className="text-[10.5px] text-slate-400 block leading-snug">{r.resolvedDesc}</span>
+                  {r.resolvedNote && (
+                    <span className="text-[10px] text-emerald-300/90 font-semibold block pt-0.5">
+                      <i className="fa-solid fa-circle-check mr-1 text-[9px]"></i>
+                      {r.resolvedNote}
+                    </span>
+                  )}
                 </div>
               </label>
             ))}

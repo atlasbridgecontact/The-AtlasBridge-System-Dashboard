@@ -51,7 +51,7 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
 
-  // Calculate strategy results in real-time
+  // Calculate strategy results in real-time (synced with active Tax Year & Carrier)
   const strategyResult = calculateSelfEmployedAcaStrategy({
     grossAGI: clientData.grossAGI,
     netBusinessProfit: netProfit,
@@ -66,6 +66,8 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
     stackSpousalIra: isMarried && stackSpousalIra,
     spouseAge,
     spouseCoveredByPlan: spouseCovered,
+    taxYear: clientData.taxYear,
+    carrierId: activeCarrier,
   });
 
   // Keep state synced when net profit or age changes
@@ -119,14 +121,15 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
         { label: 'Total Pre-Tax Deduction', value: `$${strategyResult.totalPreTaxDeduction.toLocaleString()}/yr` },
         { label: 'Baseline AGI -> Optimized ACA MAGI', value: `$${clientData.grossAGI.toLocaleString()} -> $${strategyResult.optimizedAgi.toLocaleString()}` },
         { label: 'FPL Shift', value: `${strategyResult.baselineFplPct}% -> ${strategyResult.optimizedFplPct}% FPL` },
-        { label: 'Net Monthly ACA Premium', value: `$${strategyResult.optimizedAca.netMonthlyPremium}/mo (+$${strategyResult.monthlySubsidyGain.toLocaleString()}/mo APTC boost)` },
-        { label: 'Qualified CSR Tier & Deductible', value: `${strategyResult.optimizedAca.csrLevel} ($${strategyResult.optimizedAca.deductible.toLocaleString()} ded)` },
+        { label: 'Net Monthly ACA Premium', value: `$${strategyResult.optimizedSilverTier.monthlyPremium}/mo (+$${strategyResult.monthlySubsidyGain.toLocaleString()}/mo APTC boost)` },
+        { label: 'Qualified CSR Tier & Deductible', value: `${strategyResult.optimizedAca.csrLevel} ($${strategyResult.optimizedSilverTier.deductible.toLocaleString()} ded)` },
         { label: 'Est. Annual ACA Subsidy + Tax Benefit', value: `$${strategyResult.totalAnnualBenefit.toLocaleString()}/yr` },
       ],
     });
   }, [
     onUpdateStrategySnapshot,
     activeCarrier,
+    clientData.taxYear,
     selectedVehicle,
     netProfit,
     customSepContribution,
@@ -143,9 +146,9 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
     strategyResult.optimizedAgi,
     strategyResult.baselineFplPct,
     strategyResult.optimizedFplPct,
-    strategyResult.optimizedAca.netMonthlyPremium,
+    strategyResult.optimizedSilverTier.monthlyPremium,
+    strategyResult.optimizedSilverTier.deductible,
     strategyResult.optimizedAca.csrLevel,
-    strategyResult.optimizedAca.deductible,
     strategyResult.monthlySubsidyGain,
     strategyResult.totalAnnualBenefit,
   ]);
@@ -304,7 +307,7 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
           <div className="bg-navy-950/80 p-4 rounded-xl border border-emerald-500/40 glow-emerald">
             <span className="text-[10px] uppercase font-bold text-emerald-300 block mb-1">Net Monthly ACA Premium</span>
             <div className="text-lg sm:text-xl font-black text-emerald-400 tabular-nums">
-              ${strategyResult.optimizedAca.netMonthlyPremium}
+              ${strategyResult.optimizedSilverTier.monthlyPremium.toLocaleString()}
               <span className="text-xs text-slate-400 font-normal"> / mo</span>
             </div>
             <span className="text-[11px] text-emerald-300 font-semibold">
@@ -321,7 +324,7 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
           </div>
         </div>
 
-        {strategyResult.optimizedFplPct <= 138 && (
+        {strategyResult.optimizedAca.exactFplPct <= 138 && (
           <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-3.5 text-xs text-amber-200 flex items-start gap-2.5">
             <i className="fa-solid fa-shield-halved text-amber-400 mt-0.5 shrink-0"></i>
             <span>
@@ -803,13 +806,13 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
               <tr className="bg-navy-950/60">
                 <td className="py-3 px-4 font-bold text-white">Net Monthly Health Plan Premium</td>
                 <td className="py-3 px-4 tabular-nums text-rose-300">
-                  ${strategyResult.baselineAca.netMonthlyPremium}/mo
+                  ${strategyResult.baselineSilverTier.monthlyPremium.toLocaleString()}/mo
                 </td>
                 <td className="py-3 px-4 text-emerald-300 font-extrabold tabular-nums">
-                  ${strategyResult.optimizedAca.netMonthlyPremium}/mo
+                  ${strategyResult.optimizedSilverTier.monthlyPremium.toLocaleString()}/mo
                 </td>
                 <td className="py-3 px-4 text-emerald-400 font-bold tabular-nums">
-                  -${strategyResult.monthlySubsidyGain.toLocaleString()}/mo out-of-pocket savings
+                  -${Math.max(0, strategyResult.baselineSilverTier.monthlyPremium - strategyResult.optimizedSilverTier.monthlyPremium).toLocaleString()}/mo premium savings
                 </td>
               </tr>
 
@@ -827,13 +830,13 @@ export const SelfEmployedAcaDashboard: React.FC<SelfEmployedAcaDashboardProps> =
               <tr className="bg-navy-950/60">
                 <td className="py-3 px-4 font-bold text-white">Medical Deductible / Copay</td>
                 <td className="py-3 px-4 text-slate-400 tabular-nums">
-                  ${strategyResult.baselineAca.deductible.toLocaleString()} ded / ${strategyResult.baselineAca.primaryCopay} copay
+                  ${strategyResult.baselineSilverTier.deductible.toLocaleString()} ded / ${strategyResult.baselineAca.primaryCopay} copay
                 </td>
                 <td className="py-3 px-4 text-emerald-300 font-extrabold tabular-nums">
-                  ${strategyResult.optimizedAca.deductible.toLocaleString()} ded / ${strategyResult.optimizedAca.primaryCopay} copay
+                  ${strategyResult.optimizedSilverTier.deductible.toLocaleString()} ded / ${strategyResult.optimizedAca.primaryCopay} copay
                 </td>
                 <td className="py-3 px-4 text-emerald-400 font-bold tabular-nums">
-                  -${(strategyResult.baselineAca.deductible - strategyResult.optimizedAca.deductible).toLocaleString()} deductible reduction
+                  -${Math.max(0, strategyResult.baselineSilverTier.deductible - strategyResult.optimizedSilverTier.deductible).toLocaleString()} deductible reduction
                 </td>
               </tr>
 
