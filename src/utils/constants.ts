@@ -188,6 +188,60 @@ export const ALL_PATHS: StrategyPathConfig[] = [
 
 export const TAX_YEAR_PARAMS_2027 = { baseFPL: 15960, perAddFPL: 5680 };
 
+export interface RegionalFpaCarrier {
+  id: 'national_life' | 'lafayette' | 'anico' | 'assurity';
+  name: string;
+  productName: string;
+  minQualified: number;
+  minNonQualified: number;
+  monthlyDraftMin: number;
+  annualCreditingRate: number;
+  summary: string;
+}
+
+export const REGIONAL_FPA_CARRIERS: RegionalFpaCarrier[] = [
+  {
+    id: 'national_life',
+    name: 'National Life Group',
+    productName: 'Systematic Indexed FPA Series',
+    minQualified: 1200,
+    minNonQualified: 1200,
+    monthlyDraftMin: 100,
+    annualCreditingRate: 0.058,
+    summary: 'Lowest monthly systematic access ($100/mo or $1,200/yr) with indexed upside & 0% downside floor.',
+  },
+  {
+    id: 'lafayette',
+    name: 'Lafayette Life',
+    productName: 'Marquis Flexible Deferred Annuity',
+    minQualified: 1200,
+    minNonQualified: 1200,
+    monthlyDraftMin: 100,
+    annualCreditingRate: 0.052,
+    summary: 'Flexible annual/monthly accumulation starting at $1,200/yr ($100/mo) for steady tax-deferred growth.',
+  },
+  {
+    id: 'anico',
+    name: 'American National (ANICO)',
+    productName: 'WealthQuest Citadel Flexible Annuity',
+    minQualified: 2000,
+    minNonQualified: 5000,
+    monthlyDraftMin: 100,
+    annualCreditingRate: 0.054,
+    summary: 'Multi-tier flexible deferred crediting starting at $2,000 Qualified ($5,000 Non-Qualified).',
+  },
+  {
+    id: 'assurity',
+    name: 'Assurity',
+    productName: 'SecurePath Flexible Contribution Annuity',
+    minQualified: 2000,
+    minNonQualified: 2000,
+    monthlyDraftMin: 100,
+    annualCreditingRate: 0.051,
+    summary: 'Low $2,000 initial entry with $100 flexible subsequent deposits and predictable fixed guarantees.',
+  },
+];
+
 /**
  * Carrier x Policy-Subtype Rider Compatibility Catalog
  * Ensures every rendered rider is genuinely issueable on the selected carrier + policy structure.

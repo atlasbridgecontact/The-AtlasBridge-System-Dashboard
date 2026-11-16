@@ -521,11 +521,11 @@ export const StepTwoQuestionnaire: React.FC<StepTwoQuestionnaireProps> = ({
                       type="number"
                       min="0"
                       max="1000000"
-                      step="1000"
-                      value={clientData.netSelfEmploymentProfit || Math.round(clientData.grossAGI * 0.85)}
+                      step="500"
+                      value={clientData.netSelfEmploymentProfit ?? Math.round(clientData.grossAGI * 0.85)}
                       onChange={(e) => {
-                        const val = parseInt(e.target.value) || 0;
-                        onChangeClientData({ netSelfEmploymentProfit: val });
+                        const val = parseFloat(e.target.value);
+                        onChangeClientData({ netSelfEmploymentProfit: Number.isNaN(val) ? 0 : Math.max(0, val) });
                       }}
                       className="w-24 bg-transparent text-purple-300 font-extrabold text-xs focus:outline-none text-right tabular-nums"
                     />
@@ -533,15 +533,15 @@ export const StepTwoQuestionnaire: React.FC<StepTwoQuestionnaireProps> = ({
                 </div>
                 <input
                   type="range"
-                  min="10000"
+                  min="0"
                   max="350000"
-                  step="2500"
-                  value={Math.min(350000, clientData.netSelfEmploymentProfit || Math.round(clientData.grossAGI * 0.85))}
+                  step="500"
+                  value={Math.min(350000, clientData.netSelfEmploymentProfit ?? Math.round(clientData.grossAGI * 0.85))}
                   onChange={(e) => handleSliderChange('netSelfEmploymentProfit', parseFloat(e.target.value) || 0)}
                   className="w-full h-2 bg-navy-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
                 />
                 <span className="text-[10.5px] text-slate-400 block">
-                  Net earnings determine your 25% employer profit share / SEP-IRA max limit (up to $72,000).
+                  Net earnings determine your Solo 401(k) / SEP-IRA employer contribution cap (up to {clientData.taxYear === '2026' ? '$72,000' : '$75,000'} § 415(c) base limit).
                 </span>
               </div>
 

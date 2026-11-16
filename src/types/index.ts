@@ -65,6 +65,7 @@ export type UtilizationScenarioId = 'low' | 'moderate' | 'catastrophic';
 export type SettlementPolicyType = 'universal_life' | 'whole_life' | 'convertible_term' | 'iul';
 export type SettlementHealthRating = 'standard' | 'mild_change' | 'impaired' | 'severe';
 export type RolloverTransferMode = 'qualified_rollover' | 'exchange_1035';
+export type SelfEmployedEntityBasis = 'schedule_c' | 'scorp';
 
 export type StrategyPathId =
   | 'atlasbridge'

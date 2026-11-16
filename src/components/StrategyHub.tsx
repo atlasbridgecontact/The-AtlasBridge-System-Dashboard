@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ActiveStrategySnapshot, ClientData, StrategyPathId } from '../types';
 import { ALL_PATHS, COLOR_HEX_MAP } from '../utils/constants';
 import { isOutsideAcaEnrollmentWindow } from '../utils/calculations';
@@ -34,6 +34,8 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
   onOpenBooking,
   onUpdateStrategySnapshot,
 }) => {
+  const [isHubExpanded, setIsHubExpanded] = useState<boolean>(false);
+
   const isOutsideWindow = isOutsideAcaEnrollmentWindow(clientData.acaWindow);
   const isHighIncome =
     (clientData.filingStatus === 'married' ? clientData.grossAGI > 200000 : clientData.grossAGI > 150000) ||
@@ -42,12 +44,13 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
     ['atlasbridge', 'self_employed_aca', 'traditional_aca', 'private_health'].includes(id)
   );
 
-  const availablePaths = ALL_PATHS.filter((p) => eligiblePathIds.includes(p.id)).sort((a, b) => {
-    if (a.id === activePathId) return -1;
-    if (b.id === activePathId) return 1;
-    return eligiblePathIds.indexOf(a.id) - eligiblePathIds.indexOf(b.id);
-  });
+  // Preserve recommendation priority order (index 0 is always the Top Recommended Path)
+  const orderedAvailablePaths = ALL_PATHS.filter((p) => eligiblePathIds.includes(p.id)).sort(
+    (a, b) => eligiblePathIds.indexOf(a.id) - eligiblePathIds.indexOf(b.id)
+  );
 
+  const topRecommendedPath = orderedAvailablePaths[0] || ALL_PATHS[0];
+  const visibleHubPaths = isHubExpanded ? orderedAvailablePaths : [topRecommendedPath];
   const activePathObj = ALL_PATHS.find((p) => p.id === activePathId) || ALL_PATHS[0];
 
   return (
@@ -88,64 +91,116 @@ export const StrategyHub: React.FC<StrategyHubProps> = ({
         </div>
       )}
 
-      {/* Strategy Selector Hub */}
-      <section className="glass-card p-5 sm:p-6 border-l-4 border-l-blue-500 glow-blue space-y-6">
+      {/* Strategy Selector Hub (Collapsible, Collapsed by Default Showing Top Recommended Choice) */}
+      <section className="glass-card p-5 sm:p-6 border-l-4 border-l-blue-500 glow-blue space-y-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-navy-700/60 pb-4">
           <div>
             <span className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
               <i className="fa-solid fa-compass text-xs"></i> Step 3 of 3: Unlocked Strategy Suite
             </span>
-            <h2 className="text-xl sm:text-3xl font-black text-white tracking-tight">Your Customized Strategy Hub</h2>
-            <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-3xl">
-              Filtered strictly according to your selected primary focus and eligibility criteria. Select any strategy view below to switch dashboards instantly.
+            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">Your Customized Strategy Hub</h2>
+            <p className="text-xs text-slate-300 mt-1 max-w-3xl">
+              {isHubExpanded
+                ? 'Showing all qualified strategy views tailored to your profile. Click any card below to switch dashboards.'
+                : `Collapsed to your Top Recommended strategy${activePathId !== topRecommendedPath.id ? ` (Currently viewing: ${activePathObj.label})` : ''}. Expand to explore all ${orderedAvailablePaths.length} unlocked views.`}
             </p>
           </div>
 
-          <div className="bg-navy-950 px-4 py-3 rounded-xl border border-blue-500/30 text-left lg:text-right shrink-0">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold block">Unlocked Views</span>
-            <span className="text-xs font-bold text-blue-400">{availablePaths.length} Available Strategy Views</span>
+          <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto shrink-0">
+            {orderedAvailablePaths.length > 1 && (
+              <button
+                type="button"
+                aria-expanded={isHubExpanded}
+                onClick={() => {
+                  SoundFX.playClick();
+                  setIsHubExpanded((prev) => !prev);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-navy-950 hover:bg-navy-900 border border-blue-500/40 hover:border-blue-400 text-xs font-extrabold text-blue-300 flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <i className={`fa-solid ${isHubExpanded ? 'fa-chevron-up' : 'fa-chevron-down'} text-[11px]`}></i>
+                <span>
+                  {isHubExpanded ? 'Collapse Strategy Hub' : `Expand All Views (${orderedAvailablePaths.length})`}
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
         <div className="space-y-3">
-          <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
-            <i className="fa-solid fa-grid-2 text-blue-400"></i> Available Strategy Views (Click to Switch)
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-            {availablePaths.map((path) => {
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+              <i className="fa-solid fa-star text-gold-400"></i>
+              {isHubExpanded
+                ? `All Qualified Strategy Views (${orderedAvailablePaths.length})`
+                : 'Top Recommended Choice (Click to Open or Expand All)'}
+            </h3>
+          </div>
+
+          <div
+            className={
+              isHubExpanded
+                ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5'
+                : 'grid grid-cols-1 gap-3.5'
+            }
+          >
+            {visibleHubPaths.map((path, idx) => {
               const isSelected = path.id === activePathId;
+              const isTopRec = path.id === topRecommendedPath.id && idx === 0;
               const isSettlements = path.id === 'settlements';
               return (
-                <div
+                <button
                   key={path.id}
+                  type="button"
                   onClick={() => {
                     SoundFX.playClick();
                     onSelectPath(path.id);
                   }}
-                  className={`glass-card p-3.5 relative transition-all cursor-pointer flex flex-col justify-between ${
+                  className={`glass-card p-4 relative transition-all cursor-pointer text-left flex flex-col justify-between ${
                     isSelected ? 'path-card-active' : 'glass-card-hover'
                   } ${isSettlements ? 'glow-silver border-silver-400' : ''}`}
                   style={{ borderTop: `2px solid ${COLOR_HEX_MAP[path.color] || '#3b82f6'}` }}
                 >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="w-8 h-8 rounded-lg bg-navy-900 border border-navy-700 flex items-center justify-center text-sm">
-                        <i className={`fa-solid ${path.icon}`} style={{ color: COLOR_HEX_MAP[path.color] }}></i>
+                  <div className={isHubExpanded ? '' : 'flex flex-col sm:flex-row sm:items-center justify-between gap-3'}>
+                    <div className={isHubExpanded ? '' : 'flex items-center gap-3'}>
+                      <div className={`flex items-center justify-between ${isHubExpanded ? 'mb-2' : 'shrink-0'}`}>
+                        <div className="w-9 h-9 rounded-lg bg-navy-900 border border-navy-700 flex items-center justify-center text-sm shrink-0">
+                          <i className={`fa-solid ${path.icon}`} style={{ color: COLOR_HEX_MAP[path.color] }}></i>
+                        </div>
+                        {isHubExpanded && (
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
+                              isSelected
+                                ? 'bg-blue-500/30 text-blue-200 border border-blue-400'
+                                : isTopRec
+                                ? 'bg-gold-500/20 text-gold-300 border border-gold-500/30'
+                                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            }`}
+                          >
+                            {isSelected ? 'Active View' : isTopRec ? 'Top Recommended' : 'Qualified Path'}
+                          </span>
+                        )}
                       </div>
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                          isSelected
-                            ? 'bg-blue-500/30 text-blue-200 border border-blue-400'
-                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                        }`}
-                      >
-                        {isSelected ? 'Active View' : 'Recommended Path'}
-                      </span>
+                      <div>
+                        <h4 className="font-extrabold text-white text-xs sm:text-sm tracking-tight">{path.label}</h4>
+                        <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">{path.desc}</p>
+                      </div>
                     </div>
-                    <h4 className="font-extrabold text-white text-xs sm:text-sm tracking-tight">{path.label}</h4>
-                    <p className="text-[11px] text-slate-400 mt-1 leading-snug">{path.desc}</p>
+
+                    {!isHubExpanded && (
+                      <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                        <span
+                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border whitespace-nowrap ${
+                            isSelected
+                              ? 'bg-blue-500/25 text-blue-200 border-blue-400'
+                              : 'bg-gold-500/20 text-gold-300 border-gold-500/40'
+                          }`}
+                        >
+                          {isSelected ? 'Top Recommended · Active' : 'Top Recommended · Switch Back'}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

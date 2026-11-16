@@ -232,6 +232,8 @@ export default function App() {
     if (selectedCategory === 'health') {
       if (isOutsideWindow || hasEmployerAffordable) {
         primaryPathId = unlocked[0];
+      } else if (clientData.isSelfEmployed && unlocked.includes('self_employed_aca')) {
+        primaryPathId = 'self_employed_aca';
       } else if (unlocked.includes('atlasbridge')) {
         primaryPathId = 'atlasbridge';
       } else if (unlocked.includes('self_employed_aca')) {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 import { ActiveStrategySnapshot, ClientData } from '../../types';
+import { REGIONAL_FPA_CARRIERS, RegionalFpaCarrier } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
 
 Chart.register(...registerables);
@@ -18,6 +19,8 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
 }) => {
   const [fundingSource, setFundingSource] = useState<'qualified' | 'non_qualified'>('qualified');
   const [annuityCategory, setAnnuityCategory] = useState<'fia' | 'myga' | 'spia' | 'fpa'>('fia');
+  const [selectedFpaCarrierId, setSelectedFpaCarrierId] =
+    useState<RegionalFpaCarrier['id']>('national_life');
   const [principalDeposit, setPrincipalDeposit] = useState<number>(
     Math.max(25000, clientData.dormantRetirement || clientData.existingAnnuityCash || 100000)
   );
@@ -26,14 +29,34 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
   const isQualified = fundingSource === 'qualified';
   const age = clientData.clientAge;
 
-  // FIA calculation
+  const activeFpaCarrier =
+    REGIONAL_FPA_CARRIERS.find((c) => c.id === selectedFpaCarrierId) || REGIONAL_FPA_CARRIERS[0];
+  const fpaMinDeposit = isQualified
+    ? activeFpaCarrier.minQualified
+    : activeFpaCarrier.minNonQualified;
+  const minPrincipal = annuityCategory === 'fpa' ? fpaMinDeposit : 10000;
+  const depositStep = annuityCategory === 'fpa' ? 100 : 5000;
+
+  // Keep principal deposit above selected product & regional carrier floor cleanly
+  useEffect(() => {
+    setPrincipalDeposit((prev) => Math.max(minPrincipal, prev));
+  }, [minPrincipal]);
+
+  // FIA / MYGA / FPA crediting projection
   const fiaBonusPct = 0.08; // 8% upfront premium bonus
   const fiaGrowthRate = 0.072; // ~7.2% S&P 500 participation
   const bonusCapital = principalDeposit * (annuityCategory === 'fia' ? fiaBonusPct : 0);
   const startingBase = principalDeposit + bonusCapital;
 
   let projectedValue = startingBase;
-  const rate = annuityCategory === 'myga' ? 0.0565 : annuityCategory === 'fia' ? fiaGrowthRate : 0.048;
+  const rate =
+    annuityCategory === 'myga'
+      ? 0.0565
+      : annuityCategory === 'fia'
+      ? fiaGrowthRate
+      : annuityCategory === 'fpa'
+      ? activeFpaCarrier.annualCreditingRate
+      : 0.048;
   for (let i = 1; i <= deferralYears; i++) {
     projectedValue *= 1 + rate;
   }
@@ -44,6 +67,7 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
   const payoutFactor = Math.min(0.085, Math.max(0.045, 0.05 + (incomeAge - 60) * 0.0015));
   const annualGuaranteedIncome = Math.round(estFutureValue * payoutFactor);
   const monthlyGuaranteedIncome = Math.round(annualGuaranteedIncome / 12);
+  const fpaMonthlyEquivalent = Math.round(principalDeposit / 12);
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
@@ -59,28 +83,73 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
         ? 'Immediate Annuity (SPIA)'
         : 'Flexible Premium Annuity (FPA)';
 
+    const depositDisplay =
+      annuityCategory === 'fpa'
+        ? `$${principalDeposit.toLocaleString()} ($${fpaMonthlyEquivalent.toLocaleString()}/mo pace)`
+        : `$${principalDeposit.toLocaleString()}`;
+
     onUpdateStrategySnapshot({
       pathId: 'annuities',
       pathLabel: 'Annuities & Guaranteed Income',
       summaryHeadline: `${fundingSource === 'qualified' ? 'Qualified Pre-Tax' : 'Non-Qualified / 1035'} ${categoryLabel} on $${principalDeposit.toLocaleString()} principal`,
+      selectedCarrierOrVendor:
+        annuityCategory === 'fpa'
+          ? `${activeFpaCarrier.name} — ${activeFpaCarrier.productName}`
+          : undefined,
       selectedTierOrOption: `${categoryLabel} (${fundingSource === 'qualified' ? 'Qualified' : 'Non-Qualified'})`,
       sliders: [
-        { label: 'Funding Source', value: fundingSource === 'qualified' ? 'Qualified (Pre-Tax IRA/401k)' : 'Non-Qualified (After-Tax / 1035)' },
+        {
+          label: 'Funding Source',
+          value:
+            fundingSource === 'qualified'
+              ? 'Qualified (Pre-Tax IRA/401k)'
+              : 'Non-Qualified (After-Tax / 1035)',
+        },
         { label: 'Annuity Product Category', value: categoryLabel },
-        { label: 'Initial Rollover / Principal Deposit', value: `$${principalDeposit.toLocaleString()}` },
-        { label: 'Growth Deferral Period', value: deferralYears === 0 ? `Immediate Payout (Age ${incomeAge})` : `${deferralYears} Years (Age ${incomeAge})` },
+        ...(annuityCategory === 'fpa'
+          ? [
+              {
+                label: 'Selected Regional FPA Carrier',
+                value: `${activeFpaCarrier.name} (Min $${fpaMinDeposit.toLocaleString()})`,
+              },
+            ]
+          : []),
+        { label: 'Initial Rollover / Principal Deposit', value: depositDisplay },
+        {
+          label: 'Growth Deferral Period',
+          value:
+            deferralYears === 0
+              ? `Immediate Payout (Age ${incomeAge})`
+              : `${deferralYears} Years (Age ${incomeAge})`,
+        },
       ],
       impactMetrics: [
-        { label: 'Starting Account Base', value: `$${Math.round(startingBase).toLocaleString()} (${bonusCapital > 0 ? '+8% FIA bonus' : '100% principal'})` },
-        { label: `Projected Future Value (Yr ${deferralYears})`, value: `$${estFutureValue.toLocaleString()}` },
-        { label: 'Monthly Guaranteed Lifelong Payout', value: `$${monthlyGuaranteedIncome.toLocaleString()}/mo` },
-        { label: 'Annual Guaranteed Lifelong Income', value: `$${annualGuaranteedIncome.toLocaleString()}/yr` },
+        {
+          label: 'Starting Account Base',
+          value: `$${Math.round(startingBase).toLocaleString()} (${bonusCapital > 0 ? '+8% FIA bonus' : '100% principal'})`,
+        },
+        {
+          label: `Projected Future Value (Yr ${deferralYears})`,
+          value: `$${estFutureValue.toLocaleString()}`,
+        },
+        {
+          label: 'Monthly Guaranteed Lifelong Payout',
+          value: `$${monthlyGuaranteedIncome.toLocaleString()}/mo`,
+        },
+        {
+          label: 'Annual Guaranteed Lifelong Income',
+          value: `$${annualGuaranteedIncome.toLocaleString()}/yr`,
+        },
       ],
     });
   }, [
     onUpdateStrategySnapshot,
     fundingSource,
     annuityCategory,
+    activeFpaCarrier.name,
+    activeFpaCarrier.productName,
+    fpaMinDeposit,
+    fpaMonthlyEquivalent,
     principalDeposit,
     deferralYears,
     incomeAge,
@@ -108,14 +177,15 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
 
     let fiaBalance = startingBase;
     let sp500Balance = principalDeposit;
+    const floorCap = Math.max(100, principalDeposit * 0.25);
 
     for (let i = 0; i < simYears; i++) {
       labels.push(`Year ${i + 1}`);
       const marketReturn = sp500Returns[i % sp500Returns.length];
-      sp500Balance = Math.max(1000, sp500Balance * (1 + marketReturn));
+      sp500Balance = Math.max(floorCap, sp500Balance * (1 + marketReturn));
       sp500Data.push(Math.round(sp500Balance));
 
-      // FIA crediting: Participation with 0% Downside Floor
+      // FIA/FPA crediting: Participation with 0% Downside Floor
       const creditedRate = marketReturn > 0 ? Math.min(rate, marketReturn * 0.75) : 0.0;
       fiaBalance = fiaBalance * (1 + creditedRate);
       fiaData.push(Math.round(fiaBalance));
@@ -130,7 +200,10 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
         labels: labels,
         datasets: [
           {
-            label: 'Fixed Indexed Annuity (0% Floor Guarantee)',
+            label:
+              annuityCategory === 'fpa'
+                ? `${activeFpaCarrier.name} FPA (0% Floor Guarantee)`
+                : 'Fixed Indexed Annuity (0% Floor Guarantee)',
             data: fiaData,
             borderColor: '#10b981',
             backgroundColor: 'rgba(16, 185, 129, 0.12)',
@@ -193,7 +266,9 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
         chartInstanceRef.current.destroy();
       }
     };
-  }, [startingBase, principalDeposit, deferralYears, rate, annuityCategory]);
+  }, [startingBase, principalDeposit, deferralYears, rate, annuityCategory, activeFpaCarrier.name]);
+
+  const fpaStarterPresets = [1200, 2000, 3000, 5000, 10000, 25000];
 
   return (
     <div className="space-y-8">
@@ -274,10 +349,11 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
             { id: 'fia', name: 'Fixed Indexed (FIA)', desc: 'S&P 500 index upside + 0% floor', badge: 'Top Growth' },
             { id: 'myga', name: 'MYGA (Fixed Rate)', desc: 'Guaranteed 5.65% multi-year lock', badge: 'CD Alternative' },
             { id: 'spia', name: 'Immediate (SPIA)', desc: 'Instant lifelong paycheck in 30 days', badge: 'Immediate Cash' },
-            { id: 'fpa', name: 'Flexible Premium (FPA)', desc: 'Ongoing monthly/annual deposits', badge: 'Flexible Saver' },
+            { id: 'fpa', name: 'Flexible Premium (FPA)', desc: 'Accessible from $1,200/yr ($100/mo)', badge: 'Low Entry $1.2k' },
           ].map((prod) => (
             <button
               key={prod.id}
+              type="button"
               onClick={() => {
                 SoundFX.playClick();
                 const nextCat = prod.id as typeof annuityCategory;
@@ -305,48 +381,158 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
           ))}
         </div>
 
+        {/* Regional FPA Carrier Options (Displayed cleanly when Flexible Premium Annuity is selected) */}
+        {annuityCategory === 'fpa' && (
+          <div className="bg-navy-950/90 p-5 rounded-2xl border border-emerald-500/35 space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-extrabold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                  <i className="fa-solid fa-building-shield"></i> Regional Flexible Premium (FPA) Carrier Options
+                </h4>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  Start with low flexible funding from <strong>$1,200/yr ($100/mo)</strong> up to <strong>$3,000+</strong> based on carrier minimums in your area.
+                </p>
+              </div>
+              <span className="text-[10.5px] font-bold text-gold-300 bg-gold-500/10 border border-gold-500/30 px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0 tabular-nums">
+                Active Min: ${fpaMinDeposit.toLocaleString()} ({isQualified ? 'Qualified' : 'Non-Qualified'})
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {REGIONAL_FPA_CARRIERS.map((carrier) => {
+                const carrierMin = isQualified ? carrier.minQualified : carrier.minNonQualified;
+                const isSelected = carrier.id === activeFpaCarrier.id;
+                return (
+                  <button
+                    key={carrier.id}
+                    type="button"
+                    onClick={() => {
+                      SoundFX.playClick();
+                      setSelectedFpaCarrierId(carrier.id);
+                    }}
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+                      isSelected
+                        ? 'bg-navy-900 border-2 border-emerald-400 shadow-lg shadow-emerald-500/10'
+                        : 'bg-navy-900/50 border-navy-700 hover:border-emerald-500/40'
+                    }`}
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <strong className="text-xs text-white leading-tight">{carrier.name}</strong>
+                        {isSelected && <i className="fa-solid fa-circle-check text-emerald-400 text-xs shrink-0"></i>}
+                      </div>
+                      <span className="text-[10px] font-semibold text-emerald-300 block">
+                        {carrier.productName}
+                      </span>
+                      <p className="text-[10.5px] text-slate-400 leading-snug">{carrier.summary}</p>
+                    </div>
+                    <div className="pt-2 border-t border-navy-800 flex items-center justify-between text-[10.5px] tabular-nums">
+                      <span className="font-extrabold text-gold-300">
+                        Min: ${carrierMin.toLocaleString()}
+                        {carrierMin === 1200 ? ' ($100/mo)' : ''}
+                      </span>
+                      <span className="text-slate-300 font-bold">
+                        {(carrier.annualCreditingRate * 100).toFixed(1)}% Est.
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Interactive Calculator Controls */}
         <div className="bg-navy-950 p-5 rounded-2xl border border-navy-700 space-y-6">
-          <h4 className="text-xs font-bold text-gold-400 uppercase tracking-wider flex items-center gap-2">
-            <i className="fa-solid fa-sliders text-xs"></i> Calibrate Deposit &amp; Income Horizon
-          </h4>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-bold text-gold-400 uppercase tracking-wider flex items-center gap-2">
+              <i className="fa-solid fa-sliders text-xs"></i> Calibrate Deposit &amp; Income Horizon
+            </h4>
+            {annuityCategory === 'fpa' && (
+              <span className="text-[11px] font-bold text-emerald-300 tabular-nums">
+                Monthly Draft Pace: ${fpaMonthlyEquivalent.toLocaleString()}/mo (${principalDeposit.toLocaleString()}/yr)
+              </span>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-300 font-semibold">Initial Rollover / Principal Deposit ($):</span>
-                <div className="flex items-center gap-1 bg-navy-900 px-2.5 py-1 rounded-lg border border-gold-500/40">
+            <div className="space-y-2.5">
+              <div className="flex justify-between items-center text-xs gap-2">
+                <span className="text-slate-300 font-semibold">
+                  {annuityCategory === 'fpa'
+                    ? 'Annual / Initial Flexible Deposit ($):'
+                    : 'Initial Rollover / Principal Deposit ($):'}
+                </span>
+                <div className="flex items-center gap-1 bg-navy-900 px-2.5 py-1 rounded-lg border border-gold-500/40 shrink-0">
                   <span className="text-gold-400 font-bold">$</span>
                   <input
                     type="number"
-                    min="10000"
+                    min={minPrincipal}
                     max="1000000"
-                    step="5000"
+                    step={depositStep}
                     value={principalDeposit}
-                    onChange={(e) => setPrincipalDeposit(Math.max(10000, parseFloat(e.target.value) || 10000))}
-                    className="w-28 bg-transparent text-white font-extrabold text-xs focus:outline-none text-right"
+                    onChange={(e) =>
+                      setPrincipalDeposit(Math.max(minPrincipal, parseFloat(e.target.value) || minPrincipal))
+                    }
+                    className="w-28 bg-transparent text-white font-extrabold text-xs focus:outline-none text-right tabular-nums"
                   />
                 </div>
               </div>
               <input
                 type="range"
-                min="10000"
+                min={minPrincipal}
                 max="500000"
-                step="5000"
-                value={Math.min(500000, principalDeposit)}
+                step={depositStep}
+                value={Math.min(500000, Math.max(minPrincipal, principalDeposit))}
                 onChange={(e) => {
-                  const val = parseFloat(e.target.value) || 10000;
-                  SoundFX.playSlideHum((val - 10000) / 490000);
+                  const val = Math.max(minPrincipal, parseFloat(e.target.value) || minPrincipal);
+                  SoundFX.playSlideHum((val - minPrincipal) / Math.max(1, 500000 - minPrincipal));
                   setPrincipalDeposit(val);
                 }}
                 className="w-full h-2 bg-navy-800 rounded-lg appearance-none cursor-pointer accent-gold-500"
               />
+              <div className="flex justify-between text-[10px] text-slate-400 tabular-nums">
+                <span>Min: ${minPrincipal.toLocaleString()}</span>
+                <span>{annuityCategory === 'fpa' ? '$100 steps' : '$5,000 steps'}</span>
+                <span>Max: $500,000</span>
+              </div>
+
+              {annuityCategory === 'fpa' && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-400 font-semibold mr-1">Starter Presets:</span>
+                  {fpaStarterPresets.map((presetAmt) => {
+                    const isAllowed = presetAmt >= fpaMinDeposit;
+                    const isActive = principalDeposit === presetAmt;
+                    return (
+                      <button
+                        key={presetAmt}
+                        type="button"
+                        disabled={!isAllowed}
+                        onClick={() => {
+                          SoundFX.playClick();
+                          setPrincipalDeposit(presetAmt);
+                        }}
+                        className={`px-2 py-1 rounded-md text-[10.5px] font-bold tabular-nums whitespace-nowrap shrink-0 transition-all ${
+                          !isAllowed
+                            ? 'bg-navy-900/40 text-slate-600 border border-navy-800 cursor-not-allowed'
+                            : isActive
+                            ? 'bg-emerald-500 text-navy-950 font-extrabold'
+                            : 'bg-navy-900 hover:bg-navy-800 text-emerald-300 border border-emerald-500/35 cursor-pointer'
+                        }`}
+                      >
+                        ${presetAmt.toLocaleString()}
+                        {presetAmt === 1200 ? ' ($100/mo)' : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-300 font-semibold">Growth Deferral Period:</span>
-                <span className="text-gold-400 font-extrabold text-xs">
+                <span className="text-gold-400 font-extrabold text-xs tabular-nums">
                   {deferralYears === 0 ? `Immediate Payout (Age ${incomeAge})` : `${deferralYears} Years (Age ${incomeAge})`}
                 </span>
               </div>
@@ -372,7 +558,7 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-navy-900 p-4 rounded-xl border border-navy-700 space-y-1">
             <span className="text-[10px] text-slate-400 uppercase font-semibold">Starting Account Base</span>
-            <div className="text-2xl font-black text-white">${startingBase.toLocaleString()}</div>
+            <div className="text-2xl font-black text-white tabular-nums">${startingBase.toLocaleString()}</div>
             <span className="text-[10px] text-emerald-400">
               {bonusCapital > 0 ? `+${(fiaBonusPct * 100)}% Bonus Applied ($${bonusCapital.toLocaleString()})` : '100% Principal Guaranteed'}
             </span>
@@ -380,24 +566,26 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
 
           <div className="bg-navy-900 p-4 rounded-xl border border-gold-500/40 space-y-1 bg-gold-950/20 glow-gold">
             <span className="text-[10px] text-gold-400 uppercase font-bold">Projected Future Account Value</span>
-            <div className="text-2xl font-black text-gold-300">${estFutureValue.toLocaleString()}</div>
-            <span className="text-[10px] text-gold-400">Compound Growth at Year {deferralYears}</span>
+            <div className="text-2xl font-black text-gold-300 tabular-nums">${estFutureValue.toLocaleString()}</div>
+            <span className="text-[10px] text-gold-400">
+              Compound Growth at Year {deferralYears} ({(rate * 100).toFixed(2)}% Est.)
+            </span>
           </div>
 
           <div className="bg-navy-900 p-4 rounded-xl border border-emerald-500/40 space-y-1">
             <span className="text-[10px] text-emerald-400 uppercase font-bold">Monthly Guaranteed Payout</span>
-            <div className="text-2xl font-black text-emerald-300">${monthlyGuaranteedIncome.toLocaleString()} / mo</div>
+            <div className="text-2xl font-black text-emerald-300 tabular-nums">${monthlyGuaranteedIncome.toLocaleString()} / mo</div>
             <span className="text-[10px] text-slate-400">Lifelong Guaranteed Check</span>
           </div>
 
           <div className="bg-navy-900 p-4 rounded-xl border border-blue-500/40 space-y-1">
             <span className="text-[10px] text-blue-300 uppercase font-bold">Annual Guaranteed Income</span>
-            <div className="text-2xl font-black text-blue-400">${annualGuaranteedIncome.toLocaleString()} / yr</div>
+            <div className="text-2xl font-black text-blue-400 tabular-nums">${annualGuaranteedIncome.toLocaleString()} / yr</div>
             <span className="text-[10px] text-slate-400">Never Outlive Your Capital</span>
           </div>
         </div>
 
-        {/* Interactive FIA vs S&P 500 Volatility Chart Card */}
+        {/* Interactive Annuity vs S&P 500 Volatility Chart Card */}
         <div className="bg-navy-950 p-5 rounded-2xl border border-gold-500/40 space-y-4 shadow-xl glow-gold w-full">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-navy-800 pb-3">
             <div>
@@ -405,7 +593,9 @@ export const AnnuitiesDashboard: React.FC<AnnuitiesDashboardProps> = ({
                 Asymmetric Upside Architecture
               </span>
               <h4 className="text-base sm:text-lg font-black text-white">
-                Fixed Indexed Annuity vs. S&amp;P 500 Market Volatility
+                {annuityCategory === 'fpa'
+                  ? `${activeFpaCarrier.name} Flexible Premium Annuity vs. S&P 500 Volatility`
+                  : 'Fixed Indexed Annuity vs. S&P 500 Market Volatility'}
               </h4>
               <p className="text-xs text-slate-300">
                 Annual index resets lock in your high-water mark gains. When the market plunges, your return is 0% (zero loss of principal).

@@ -5,6 +5,7 @@ import {
   HealthCarrierId,
   PrivateHealthCarrierId,
   PrivatePpoTierId,
+  SelfEmployedEntityBasis,
   TaxYear,
   UtilizationScenarioId,
 } from '../types';
@@ -32,15 +33,17 @@ export function getTraditionalIRADeductionLimit(
   age: number,
   isCoveredByWorkplacePlan: boolean,
   filingStatus: FilingStatus = 'single',
-  isSpouseCoveredByWorkplacePlan: boolean = false
+  isSpouseCoveredByWorkplacePlan: boolean = false,
+  taxYear: TaxYear = '2027'
 ): IRADeductionResult {
   const statCap = getIRSLimitForAge(age);
   const isMarried = filingStatus === 'married';
+  const is2026 = taxYear === '2026';
 
-  // Case 1: Taxpayer is covered by workplace plan
+  // Case 1: Taxpayer is covered by workplace plan (IRS Notice 2025-67 for 2026; Notice 2026-66 for 2027+)
   if (isCoveredByWorkplacePlan) {
-    const startRange = isMarried ? 130000 : 81000;
-    const endRange = isMarried ? 150000 : 91000;
+    const startRange = isMarried ? (is2026 ? 129000 : 133000) : (is2026 ? 81000 : 83000);
+    const endRange = isMarried ? (is2026 ? 149000 : 153000) : (is2026 ? 91000 : 93000);
     const rangeSpan = endRange - startRange;
 
     if (magiAfter401k < startRange) {
@@ -73,8 +76,8 @@ export function getTraditionalIRADeductionLimit(
 
   // Case 2: Taxpayer is NOT covered by workplace plan, but spouse IS covered (IRC § 219(g)(7))
   if (isMarried && isSpouseCoveredByWorkplacePlan) {
-    const startRange = 240000;
-    const endRange = 250000;
+    const startRange = is2026 ? 242000 : 250000;
+    const endRange = is2026 ? 252000 : 260000;
     const rangeSpan = endRange - startRange;
 
     if (magiAfter401k < startRange) {
@@ -82,7 +85,7 @@ export function getTraditionalIRADeductionLimit(
         maxDeductible: statCap,
         phaseOutStatus: 'full',
         phaseOutPct: 100,
-        notice: `Full $${statCap.toLocaleString()} Spousal IRA deduction qualified under IRC § 219(g)(7) (Non-covered spouse threshold MAGI < $240,000).`,
+        notice: `Full $${statCap.toLocaleString()} Spousal IRA deduction qualified under IRC § 219(g)(7) (Non-covered spouse threshold MAGI < $${startRange.toLocaleString()}).`,
       };
     } else if (magiAfter401k < endRange) {
       const remainingSpan = endRange - magiAfter401k;
@@ -93,14 +96,14 @@ export function getTraditionalIRADeductionLimit(
         maxDeductible: partialCap,
         phaseOutStatus: 'partial',
         phaseOutPct: pctDeductible,
-        notice: `Partial phase-out for non-covered spouse ($240k - $250k MAGI range). Capped at $${partialCap.toLocaleString()} deductible under IRC § 219(g)(7).`,
+        notice: `Partial phase-out for non-covered spouse ($${startRange.toLocaleString()} - $${endRange.toLocaleString()} MAGI range). Capped at $${partialCap.toLocaleString()} deductible under IRC § 219(g)(7).`,
       };
     } else {
       return {
         maxDeductible: 0,
         phaseOutStatus: 'none',
         phaseOutPct: 0,
-        notice: `Joint MAGI ($${Math.round(magiAfter401k).toLocaleString()}) exceeds the $250,000 threshold for non-covered spouses under IRC § 219(g)(7). Contributions are after-tax ($0 MAGI reduction).`,
+        notice: `Joint MAGI ($${Math.round(magiAfter401k).toLocaleString()}) exceeds the $${endRange.toLocaleString()} threshold for non-covered spouses under IRC § 219(g)(7). Contributions are after-tax ($0 MAGI reduction).`,
       };
     }
   }
@@ -626,19 +629,310 @@ export function calculatePrivatePpoEstimate(params: {
   };
 }
 
+export interface Solo401kYearLimits {
+  baseElectiveDeferral: number;
+  standardCatchUp: number;
+  superCatchUp: number;
+  catchUpCap: number;
+  isSuperCatchUp: boolean;
+  section415cCap: number;
+  halfSeTax: number;
+  earnedIncomeBase: number;
+  w2Compensation: number;
+  k1Distribution: number;
+  soloEmployeeMax: number;
+  soloEmployerMax: number;
+  solo401kMaxTotal: number;
+  sepIraMax: number;
+  clientPhaseOutStart: number;
+  clientPhaseOutEnd: number;
+  spousalPhaseOutStart: number;
+  spousalPhaseOutEnd: number;
+}
+
+export function getSolo401kLimitsForYearAndAge(
+  taxYear: TaxYear = '2027',
+  age: number,
+  netBusinessProfit: number,
+  entityBasis: SelfEmployedEntityBasis = 'schedule_c',
+  filingStatus: FilingStatus = 'single',
+  scorpW2Wages?: number
+): Solo401kYearLimits {
+  const is2026 = taxYear === '2026';
+  const isMarried = filingStatus === 'married';
+
+  // IRS Notice 2025-67 (2026) vs IRS Notice 2026-66 (2027+)
+  const baseElectiveDeferral = is2026 ? 24500 : 25500;
+  const standardCatchUp = is2026 ? 8000 : 8500;
+  const superCatchUp = is2026 ? 11250 : 11750; // SECURE 2.0 ages 60–63
+  const isSuperCatchUp = age >= 60 && age <= 63;
+  const catchUpCap = isSuperCatchUp ? superCatchUp : age >= 50 ? standardCatchUp : 0;
+  const section415cCap = is2026 ? 72000 : 75000;
+
+  const cleanProfit = Math.max(0, netBusinessProfit);
+  // Schedule C deducts 1/2 Self-Employment Tax before 20% net employer profit share;
+  // S-Corp bases Solo 401(k)/SEP eligibility strictly on W-2 officer wages (K-1 distributions excluded)
+  const w2Compensation =
+    entityBasis === 'scorp'
+      ? Math.min(cleanProfit, Math.max(0, scorpW2Wages !== undefined ? scorpW2Wages : Math.round(cleanProfit * 0.55)))
+      : 0;
+  const k1Distribution = entityBasis === 'scorp' ? Math.max(0, cleanProfit - w2Compensation) : 0;
+
+  const halfSeTax =
+    entityBasis === 'schedule_c' ? Math.round(cleanProfit * 0.9235 * 0.0765) : 0;
+  const earnedIncomeBase =
+    entityBasis === 'schedule_c' ? Math.max(0, cleanProfit - halfSeTax) : w2Compensation;
+
+  const soloEmployeeMax = Math.min(earnedIncomeBase, baseElectiveDeferral + catchUpCap);
+  const employerPctRaw =
+    entityBasis === 'schedule_c'
+      ? Math.round(earnedIncomeBase * 0.20)
+      : Math.round(w2Compensation * 0.25);
+
+  const baseDeferralUsedMax = Math.min(earnedIncomeBase, baseElectiveDeferral);
+  const employerRoom415c = Math.max(0, section415cCap - baseDeferralUsedMax);
+  const soloEmployerMax = Math.min(
+    employerPctRaw,
+    employerRoom415c,
+    Math.max(0, earnedIncomeBase - soloEmployeeMax)
+  );
+  const solo401kMaxTotal = Math.min(earnedIncomeBase, section415cCap + catchUpCap);
+  const sepIraMax = Math.min(section415cCap, employerPctRaw);
+
+  const clientPhaseOutStart = isMarried ? (is2026 ? 129000 : 133000) : (is2026 ? 81000 : 83000);
+  const clientPhaseOutEnd = clientPhaseOutStart + (isMarried ? 20000 : 10000);
+  const spousalPhaseOutStart = is2026 ? 242000 : 250000;
+  const spousalPhaseOutEnd = spousalPhaseOutStart + 10000;
+
+  return {
+    baseElectiveDeferral,
+    standardCatchUp,
+    superCatchUp,
+    catchUpCap,
+    isSuperCatchUp,
+    section415cCap,
+    halfSeTax,
+    earnedIncomeBase,
+    w2Compensation,
+    k1Distribution,
+    soloEmployeeMax,
+    soloEmployerMax,
+    solo401kMaxTotal,
+    sepIraMax,
+    clientPhaseOutStart,
+    clientPhaseOutEnd,
+    spousalPhaseOutStart,
+    spousalPhaseOutEnd,
+  };
+}
+
+export interface RealisticSelfEmployedDefaults {
+  scorpW2Wages: number;
+  soloEmployee: number;
+  soloEmployer: number;
+  sepContribution: number;
+  stackClientIra: boolean;
+  clientIraAmount: number;
+  stackSpouseIra: boolean;
+  spouseIraAmount: number;
+  acaSafeFloor138: number;
+  target150FplAgi: number;
+  cliff400FplAgi: number;
+  maxSafeDeductionBudget: number;
+  sustainableCashFlowCap: number;
+}
+
+export function computeRealisticSelfEmployedDefaults(params: {
+  grossAGI: number;
+  netBusinessProfit: number;
+  clientAge: number;
+  spouseAge?: number;
+  filingStatus: FilingStatus;
+  householdSize: number;
+  entityBasis?: SelfEmployedEntityBasis;
+  taxYear?: TaxYear;
+}): RealisticSelfEmployedDefaults {
+  const {
+    grossAGI,
+    netBusinessProfit,
+    clientAge,
+    spouseAge = clientAge,
+    filingStatus,
+    householdSize,
+    entityBasis = 'schedule_c',
+    taxYear = '2027',
+  } = params;
+
+  const isMarried = filingStatus === 'married';
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
+  const target150FplAgi = Math.max(acaSafeFloor138, Math.floor(fpl100 * 1.495));
+  const cliff400FplAgi = Math.floor(fpl100 * 4.0);
+  const maxSafeDeductionBudget = Math.max(0, grossAGI - acaSafeFloor138);
+
+  const cleanProfit = Math.max(0, netBusinessProfit);
+  // Reasonable S-Corp officer W-2 salary (~60% at lower profits, ~55% mid-high, capped for QBI balance)
+  const scorpW2Ratio = cleanProfit <= 60000 ? 0.60 : cleanProfit <= 150000 ? 0.55 : 0.45;
+  const scorpW2Wages =
+    entityBasis === 'scorp'
+      ? Math.min(cleanProfit, Math.round((cleanProfit * scorpW2Ratio) / 500) * 500)
+      : 0;
+
+  const limits = getSolo401kLimitsForYearAndAge(
+    taxYear,
+    clientAge,
+    cleanProfit,
+    entityBasis,
+    filingStatus,
+    scorpW2Wages
+  );
+
+  // Cash-flow sustainability factor scales gently with business profit
+  // Modest earners (~$30k) retain ~70%+ cash flow for living expenses; higher earners save more to hit ACA cliffs
+  const cashFlowRate =
+    cleanProfit <= 45000
+      ? 0.28
+      : cleanProfit <= 90000
+      ? 0.38
+      : cleanProfit <= 160000
+      ? 0.50
+      : 0.60;
+  const sustainableCashFlowCap = Math.round((cleanProfit * cashFlowRate) / 500) * 500;
+
+  // Desired reduction aims for 150% FPL Silver CSR within sustainable cash flow and strict 138% FPL floor
+  const reductionFor150Fpl = Math.max(0, grossAGI - target150FplAgi);
+  const desiredTotal = Math.min(
+    maxSafeDeductionBudget,
+    Math.max(0, Math.min(reductionFor150Fpl, sustainableCashFlowCap))
+  );
+
+  // Allocate realistically across Solo 401(k) employee deferral + employer profit share (both sides!)
+  const targetPrimary = Math.min(desiredTotal, limits.solo401kMaxTotal);
+  const empShareGoal = Math.round((targetPrimary * 0.65) / 500) * 500;
+  let soloEmployee = Math.min(limits.soloEmployeeMax, empShareGoal);
+  let soloEmployer = Math.min(
+    limits.soloEmployerMax,
+    Math.round(Math.max(0, targetPrimary - soloEmployee) / 500) * 500
+  );
+  // Top up employee deferral if employer cap was lower
+  if (soloEmployee + soloEmployer < targetPrimary) {
+    soloEmployee = Math.min(
+      limits.soloEmployeeMax,
+      Math.floor((targetPrimary - soloEmployer) / 500) * 500
+    );
+  }
+  const actualSoloTotal = Math.min(soloEmployee + soloEmployer, maxSafeDeductionBudget);
+  if (soloEmployee + soloEmployer > maxSafeDeductionBudget) {
+    soloEmployer = Math.min(soloEmployer, Math.max(0, maxSafeDeductionBudget - soloEmployee));
+    soloEmployee = Math.min(soloEmployee, Math.max(0, maxSafeDeductionBudget - soloEmployer));
+  }
+
+  // SEP-IRA realistic default
+  const sepContribution = Math.min(
+    limits.sepIraMax,
+    maxSafeDeductionBudget,
+    Math.floor(desiredTotal / 500) * 500
+  );
+
+  // Stacked Traditional IRA realistic defaults (avoid active-participant phaseout & respect 138% floor)
+  const clientIraStat = getIRSLimitForAge(clientAge);
+  const spouseIraStat = getIRSLimitForAge(spouseAge);
+  const remainingBudgetAfterSolo = Math.max(0, desiredTotal - actualSoloTotal);
+  const magiAfterSolo = Math.max(0, grossAGI - actualSoloTotal);
+
+  let clientIraAmount = 0;
+  if (
+    remainingBudgetAfterSolo >= 500 &&
+    (actualSoloTotal === 0 || magiAfterSolo < limits.clientPhaseOutStart)
+  ) {
+    clientIraAmount = Math.min(
+      clientIraStat,
+      Math.floor(remainingBudgetAfterSolo / 100) * 100
+    );
+  } else if (
+    grossAGI - actualSoloTotal > target150FplAgi &&
+    (actualSoloTotal === 0 || magiAfterSolo < limits.clientPhaseOutStart) &&
+    actualSoloTotal < sustainableCashFlowCap
+  ) {
+    const spareHeadroom = Math.min(
+      maxSafeDeductionBudget - actualSoloTotal,
+      Math.max(0, sustainableCashFlowCap - actualSoloTotal)
+    );
+    clientIraAmount = Math.min(clientIraStat, Math.floor(spareHeadroom / 100) * 100);
+  }
+
+  const remainingForSpouse = Math.max(
+    0,
+    Math.min(
+      maxSafeDeductionBudget - actualSoloTotal - clientIraAmount,
+      sustainableCashFlowCap - actualSoloTotal - clientIraAmount
+    )
+  );
+  const spouseIraAmount =
+    isMarried &&
+    remainingForSpouse >= 500 &&
+    magiAfterSolo - clientIraAmount < limits.spousalPhaseOutStart
+      ? Math.min(spouseIraStat, Math.floor(remainingForSpouse / 100) * 100)
+      : 0;
+
+  return {
+    scorpW2Wages,
+    soloEmployee,
+    soloEmployer,
+    sepContribution,
+    stackClientIra: clientIraAmount > 0 || actualSoloTotal === 0 || magiAfterSolo < limits.clientPhaseOutStart,
+    clientIraAmount,
+    stackSpouseIra: isMarried && (spouseIraAmount > 0 || magiAfterSolo - clientIraAmount < limits.spousalPhaseOutStart),
+    spouseIraAmount,
+    acaSafeFloor138,
+    target150FplAgi,
+    cliff400FplAgi,
+    maxSafeDeductionBudget,
+    sustainableCashFlowCap,
+  };
+}
+
 export interface SelfEmployedStrategyResult {
+  limits: Solo401kYearLimits;
+  acaSafeFloor138: number;
+  target150FplAgi: number;
+  cliff400FplAgi: number;
+  maxSafeDeductionBudget: number;
+  remainingSafeBudget: number;
+  isAtAcaSafeFloor: boolean;
   solo401kMaxTotal: number;
   solo401kEmployeeMax: number;
   solo401kEmployerMax: number;
   sepIraMax: number;
   traditionalIraStatLimit: number;
   spousalIraStatLimit: number;
+  clientIraRequested: number;
   clientIraDeductible: number;
+  clientIraNonDeductible: number;
   clientIraPhaseOutStatus: 'full' | 'partial' | 'none';
   clientIraPhaseOutNotice: string;
+  spouseIraRequested: number;
   spouseIraDeductible: number;
+  spouseIraNonDeductible: number;
   spouseIraPhaseOutStatus: 'full' | 'partial' | 'none';
   spouseIraPhaseOutNotice: string;
+  hasPhaseOutWarning: boolean;
+  phaseOutWarningHeadline: string;
+  idealFix: {
+    summary: string;
+    soloEmployee: number;
+    soloEmployer: number;
+    sepContribution: number;
+    stackClientIra: boolean;
+    clientIraAmount: number;
+    stackSpouseIra: boolean;
+    spouseIraAmount: number;
+  };
+  activeSoloEmployee: number;
+  activeSoloEmployer: number;
+  activeSepContribution: number;
+  activePrimaryPlanContribution: number;
+  magiAfterPrimaryPlan: number;
   totalPreTaxDeduction: number;
   baselineAgi: number;
   baselineFplPct: number;
@@ -663,11 +957,15 @@ export function calculateSelfEmployedAcaStrategy(params: {
   filingStatus: FilingStatus;
   householdSize: number;
   selectedVehicle: 'solo401k' | 'sep_ira' | 'stacked_solo' | 'stacked_sep';
+  entityBasis?: SelfEmployedEntityBasis;
+  scorpW2Wages?: number;
   customSoloEmployee?: number;
   customSoloEmployer?: number;
   customSepContribution?: number;
   stackClientTradIra?: boolean;
+  customClientIraAmount?: number;
   stackSpousalIra?: boolean;
+  customSpouseIraAmount?: number;
   spouseAge?: number;
   spouseCoveredByPlan?: boolean;
   taxYear?: TaxYear;
@@ -680,6 +978,8 @@ export function calculateSelfEmployedAcaStrategy(params: {
     filingStatus,
     householdSize,
     selectedVehicle,
+    entityBasis = 'schedule_c',
+    scorpW2Wages,
     stackClientTradIra = true,
     stackSpousalIra = true,
     spouseAge = 52,
@@ -689,129 +989,269 @@ export function calculateSelfEmployedAcaStrategy(params: {
   } = params;
 
   const isMarried = filingStatus === 'married';
-  const is50Plus = clientAge >= 50;
-  const isSpouse50Plus = spouseAge >= 50;
+  const limits = getSolo401kLimitsForYearAndAge(
+    taxYear,
+    clientAge,
+    netBusinessProfit,
+    entityBasis,
+    filingStatus,
+    scorpW2Wages
+  );
 
-  // 1. Statutory Caps (2026/2027)
-  const soloEmployeeCap = 23500 + (is50Plus ? 7500 : 0);
-  // Net self-employed profit cap for employer share: approx 20% of net Schedule C profit (adjusted for SE tax)
-  const soloEmployerMax = Math.min(Math.max(0, netBusinessProfit * 0.20), 48500);
-  const solo401kCombinedCap = 72000 + (is50Plus ? 7500 : 0);
-  const solo401kMaxTotal = Math.min(soloEmployeeCap + soloEmployerMax, solo401kCombinedCap);
+  // Strict 138% FPL Medicaid-safe ACA floor guard
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
+  const target150FplAgi = Math.max(acaSafeFloor138, Math.floor(fpl100 * 1.495));
+  const cliff400FplAgi = Math.floor(fpl100 * 4.0);
+  const maxSafeDeductionBudget = Math.max(0, grossAGI - acaSafeFloor138);
 
-  // SEP-IRA Max (25% of W2 or ~20% of net SE profit, capped at $72,000)
-  const sepIraMax = Math.min(Math.max(0, netBusinessProfit * 0.20), 72000);
-
-  // Traditional IRA statutory limit
+  // Traditional IRA statutory limit ($7,500 under 50 / $8,600 age 50+)
   const clientIraCap = getIRSLimitForAge(clientAge, filingStatus);
   const spouseIraCap = getIRSLimitForAge(spouseAge, filingStatus);
 
-  // 2. Determine Primary Vehicle Contribution
+  // Determine Primary Vehicle Contribution bounded by IRS caps & 138% FPL Safe Budget
   let primaryPlanContribution = 0;
+  let activeSoloEmp = 0;
+  let activeSoloEr = 0;
+  let activeSep = 0;
+
   if (selectedVehicle === 'solo401k' || selectedVehicle === 'stacked_solo') {
-    const employeeVal = params.customSoloEmployee !== undefined ? params.customSoloEmployee : soloEmployeeCap;
-    const employerVal = params.customSoloEmployer !== undefined ? params.customSoloEmployer : soloEmployerMax;
-    primaryPlanContribution = Math.min(employeeVal + employerVal, solo401kMaxTotal);
+    activeSoloEmp = Math.min(
+      params.customSoloEmployee !== undefined ? params.customSoloEmployee : limits.soloEmployeeMax,
+      limits.soloEmployeeMax,
+      maxSafeDeductionBudget
+    );
+    activeSoloEr = Math.min(
+      params.customSoloEmployer !== undefined ? params.customSoloEmployer : limits.soloEmployerMax,
+      limits.soloEmployerMax,
+      Math.max(0, maxSafeDeductionBudget - activeSoloEmp)
+    );
+    primaryPlanContribution = Math.min(
+      activeSoloEmp + activeSoloEr,
+      limits.solo401kMaxTotal,
+      maxSafeDeductionBudget
+    );
   } else {
-    // SEP-IRA
-    const sepVal = params.customSepContribution !== undefined ? params.customSepContribution : sepIraMax;
-    primaryPlanContribution = Math.min(sepVal, sepIraMax);
+    activeSep = Math.min(
+      params.customSepContribution !== undefined ? params.customSepContribution : limits.sepIraMax,
+      limits.sepIraMax,
+      maxSafeDeductionBudget
+    );
+    primaryPlanContribution = activeSep;
   }
 
-  // Intermediary MAGI after primary retirement plan deduction
-  // Contributing to Solo 401k or SEP-IRA automatically flags client as ACTIVE PARTICIPANT
   const magiAfterPrimaryPlan = Math.max(0, grossAGI - primaryPlanContribution);
+  const budgetAfterPrimary = Math.max(0, maxSafeDeductionBudget - primaryPlanContribution);
 
-  // 3. Active Participant Phase-Out for Client Traditional IRA
-  // Solo 401(k) and SEP-IRA both trigger active participant status
-  let clientIraDeductible = 0;
-  let clientIraPhaseOutStatus: 'full' | 'partial' | 'none' = 'none';
+  const clientRequested = stackClientTradIra
+    ? Math.min(
+        clientIraCap,
+        budgetAfterPrimary,
+        Math.max(0, params.customClientIraAmount !== undefined ? params.customClientIraAmount : clientIraCap)
+      )
+    : 0;
+
+  // Evaluate Active Participant Phase-Out for Client Traditional IRA (only active if contributing > $0 to Solo 401k / SEP)
+  const isParticipantActive = primaryPlanContribution > 0;
+  let clientIraMaxAllowed = clientIraCap;
+  let clientIraPhaseOutStatus: 'full' | 'partial' | 'none' = 'full';
   let clientIraPhaseOutNotice = '';
 
-  if (stackClientTradIra) {
-    const startRange = isMarried ? 129000 : 79000;
-    const endRange = isMarried ? 149000 : 89000;
-    const rangeSpan = endRange - startRange;
-
-    if (magiAfterPrimaryPlan < startRange) {
-      clientIraDeductible = clientIraCap;
-      clientIraPhaseOutStatus = 'full';
-      clientIraPhaseOutNotice = `Full $${clientIraCap.toLocaleString()} deduction qualified (MAGI $${Math.round(magiAfterPrimaryPlan).toLocaleString()} < $${startRange.toLocaleString()}). Drops AGI dollar-for-dollar.`;
-    } else if (magiAfterPrimaryPlan < endRange) {
-      const remainingSpan = endRange - magiAfterPrimaryPlan;
-      const ratio = remainingSpan / rangeSpan;
-      clientIraDeductible = Math.max(200, Math.round((clientIraCap * ratio) / 10) * 10);
-      clientIraPhaseOutStatus = 'partial';
-      clientIraPhaseOutNotice = `Partial phase-out ($${startRange.toLocaleString()} - $${endRange.toLocaleString()} MAGI range). Deductible capped at $${clientIraDeductible.toLocaleString()} under IRC § 219(g).`;
-    } else {
-      clientIraDeductible = 0;
-      clientIraPhaseOutStatus = 'none';
-      clientIraPhaseOutNotice = `Active Participant Trap: MAGI ($${Math.round(magiAfterPrimaryPlan).toLocaleString()}) exceeds the $${endRange.toLocaleString()} limit. Any IRA contribution is non-deductible after-tax and provides $0 ACA AGI reduction.`;
-    }
+  if (clientRequested === 0) {
+    clientIraPhaseOutNotice =
+      budgetAfterPrimary === 0 && grossAGI > acaSafeFloor138
+        ? `138% FPL Safe Cap Reached: $${primaryPlanContribution.toLocaleString()} primary plan contribution already lowers MAGI to the $${acaSafeFloor138.toLocaleString()} (138% FPL) ACA safety floor.`
+        : 'Client Traditional IRA stacking disabled ($0 allocated).';
+  } else if (!isParticipantActive) {
+    clientIraPhaseOutStatus = 'full';
+    clientIraPhaseOutNotice = `Full $${clientRequested.toLocaleString()} deductible ($0 contributed to Solo 401(k)/SEP, so no active-participant phaseout applies).`;
+  } else if (magiAfterPrimaryPlan < limits.clientPhaseOutStart) {
+    clientIraPhaseOutStatus = 'full';
+    clientIraPhaseOutNotice = `Full $${clientRequested.toLocaleString()} deduction qualified (MAGI $${Math.round(magiAfterPrimaryPlan).toLocaleString()} < $${limits.clientPhaseOutStart.toLocaleString()}). Drops ACA MAGI dollar-for-dollar.`;
+  } else if (magiAfterPrimaryPlan < limits.clientPhaseOutEnd) {
+    const ratio =
+      (limits.clientPhaseOutEnd - magiAfterPrimaryPlan) /
+      (limits.clientPhaseOutEnd - limits.clientPhaseOutStart);
+    clientIraMaxAllowed = Math.max(200, Math.round((clientIraCap * ratio) / 10) * 10);
+    clientIraPhaseOutStatus = clientRequested > clientIraMaxAllowed ? 'partial' : 'full';
+    clientIraPhaseOutNotice = `Partial phase-out ($${limits.clientPhaseOutStart.toLocaleString()}–$${limits.clientPhaseOutEnd.toLocaleString()} MAGI range). Max IRS deductible limit is $${clientIraMaxAllowed.toLocaleString()} under IRC § 219(g).`;
+  } else {
+    clientIraMaxAllowed = 0;
+    clientIraPhaseOutStatus = 'none';
+    clientIraPhaseOutNotice = `Active Participant Trap: Intermediate MAGI ($${Math.round(magiAfterPrimaryPlan).toLocaleString()}) exceeds the $${limits.clientPhaseOutEnd.toLocaleString()} IRS cutoff. $${clientRequested.toLocaleString()} allocated here becomes non-deductible after-tax with $0 ACA reduction.`;
   }
 
-  // 4. Spousal IRA Loophole (IRC § 219(g)(7))
-  let spouseIraDeductible = 0;
-  let spouseIraPhaseOutStatus: 'full' | 'partial' | 'none' = 'none';
+  const clientIraDeductible = Math.min(clientRequested, clientIraMaxAllowed);
+  const clientIraNonDeductible = Math.max(0, clientRequested - clientIraDeductible);
+
+  // Spousal IRA Loophole (IRC § 219(g)(7))
+  const budgetAfterClient = Math.max(0, budgetAfterPrimary - clientIraDeductible);
+  const spouseRequested =
+    isMarried && stackSpousalIra
+      ? Math.min(
+          spouseIraCap,
+          budgetAfterClient,
+          Math.max(0, params.customSpouseIraAmount !== undefined ? params.customSpouseIraAmount : spouseIraCap)
+        )
+      : 0;
+
+  let spouseIraMaxAllowed = spouseIraCap;
+  let spouseIraPhaseOutStatus: 'full' | 'partial' | 'none' = 'full';
   let spouseIraPhaseOutNotice = '';
   let isSpousalLoopholeActive = false;
+  const magiBeforeSpouse = Math.max(0, magiAfterPrimaryPlan - clientIraDeductible);
 
-  if (isMarried && stackSpousalIra) {
-    const magiBeforeSpouse = Math.max(0, magiAfterPrimaryPlan - clientIraDeductible);
-    if (!spouseCoveredByPlan) {
-      // Uncovered spouse faces high phase-out: $242,000 to $252,000
-      const spousalStart = 242000;
-      const spousalEnd = 252000;
-      const spousalSpan = spousalEnd - spousalStart;
-
-      if (magiBeforeSpouse < spousalStart) {
-        spouseIraDeductible = spouseIraCap;
+  if (isMarried) {
+    if (spouseRequested === 0) {
+      spouseIraPhaseOutNotice =
+        budgetAfterClient === 0 && grossAGI > acaSafeFloor138
+          ? `138% FPL Safe Cap Reached: Remaining deductions already place household MAGI at the $${acaSafeFloor138.toLocaleString()} ACA safety floor.`
+          : 'Spousal IRA stacking disabled ($0 allocated).';
+    } else if (!spouseCoveredByPlan) {
+      if (magiBeforeSpouse < limits.spousalPhaseOutStart) {
         spouseIraPhaseOutStatus = 'full';
-        spouseIraPhaseOutNotice = `Spousal IRA Loophole Active: Uncovered spouse qualifies for full $${spouseIraCap.toLocaleString()} deduction up to $${spousalStart.toLocaleString()} MAGI under IRC § 219(g)(7).`;
-        if (clientIraDeductible < clientIraCap) {
-          isSpousalLoopholeActive = true;
-        }
-      } else if (magiBeforeSpouse < spousalEnd) {
-        const ratio = (spousalEnd - magiBeforeSpouse) / spousalSpan;
-        spouseIraDeductible = Math.max(200, Math.round((spouseIraCap * ratio) / 10) * 10);
-        spouseIraPhaseOutStatus = 'partial';
-        spouseIraPhaseOutNotice = `Partial Spousal IRA phase-out ($242k - $252k MAGI). Capped at $${spouseIraDeductible.toLocaleString()} deductible under IRC § 219(g)(7).`;
+        spouseIraPhaseOutNotice = `Spousal IRA Loophole Active: Uncovered spouse qualifies for full $${spouseRequested.toLocaleString()} deduction up to $${limits.spousalPhaseOutStart.toLocaleString()} MAGI under IRC § 219(g)(7).`;
+        if (clientIraDeductible < clientIraCap) isSpousalLoopholeActive = true;
+      } else if (magiBeforeSpouse < limits.spousalPhaseOutEnd) {
+        const ratio =
+          (limits.spousalPhaseOutEnd - magiBeforeSpouse) /
+          (limits.spousalPhaseOutEnd - limits.spousalPhaseOutStart);
+        spouseIraMaxAllowed = Math.max(200, Math.round((spouseIraCap * ratio) / 10) * 10);
+        spouseIraPhaseOutStatus = spouseRequested > spouseIraMaxAllowed ? 'partial' : 'full';
+        spouseIraPhaseOutNotice = `Partial Spousal IRA phase-out ($${limits.spousalPhaseOutStart.toLocaleString()}–$${limits.spousalPhaseOutEnd.toLocaleString()} MAGI). Max deductible: $${spouseIraMaxAllowed.toLocaleString()}.`;
         isSpousalLoopholeActive = true;
       } else {
-        spouseIraDeductible = 0;
+        spouseIraMaxAllowed = 0;
         spouseIraPhaseOutStatus = 'none';
-        spouseIraPhaseOutNotice = `Joint MAGI ($${Math.round(magiBeforeSpouse).toLocaleString()}) exceeds the $252,000 limit for non-covered spouses under IRC § 219(g)(7).`;
+        spouseIraPhaseOutNotice = `Joint MAGI ($${Math.round(magiBeforeSpouse).toLocaleString()}) exceeds the $${limits.spousalPhaseOutEnd.toLocaleString()} limit for uncovered spouses under IRC § 219(g)(7).`;
       }
     } else {
-      // Spouse is also covered by their own workplace plan -> standard MFJ phaseout $129k - $149k
-      const startRange = 129000;
-      const endRange = 149000;
-      if (magiBeforeSpouse < startRange) {
-        spouseIraDeductible = spouseIraCap;
+      if (magiBeforeSpouse < limits.clientPhaseOutStart) {
         spouseIraPhaseOutStatus = 'full';
-        spouseIraPhaseOutNotice = `Spouse covered by plan: full $${spouseIraCap.toLocaleString()} deduction qualified (MAGI < $129,000).`;
-      } else if (magiBeforeSpouse < endRange) {
-        const ratio = (endRange - magiBeforeSpouse) / (endRange - startRange);
-        spouseIraDeductible = Math.max(200, Math.round((spouseIraCap * ratio) / 10) * 10);
-        spouseIraPhaseOutStatus = 'partial';
-        spouseIraPhaseOutNotice = `Spouse covered by plan: partial phase-out ($129k - $149k range). Capped at $${spouseIraDeductible.toLocaleString()}.`;
+        spouseIraPhaseOutNotice = `Spouse covered by plan: full $${spouseRequested.toLocaleString()} deduction qualified (MAGI < $${limits.clientPhaseOutStart.toLocaleString()}).`;
+      } else if (magiBeforeSpouse < limits.clientPhaseOutEnd) {
+        const ratio =
+          (limits.clientPhaseOutEnd - magiBeforeSpouse) /
+          (limits.clientPhaseOutEnd - limits.clientPhaseOutStart);
+        spouseIraMaxAllowed = Math.max(200, Math.round((spouseIraCap * ratio) / 10) * 10);
+        spouseIraPhaseOutStatus = spouseRequested > spouseIraMaxAllowed ? 'partial' : 'full';
+        spouseIraPhaseOutNotice = `Spouse covered by plan: partial phase-out ($${limits.clientPhaseOutStart.toLocaleString()}–$${limits.clientPhaseOutEnd.toLocaleString()}). Max deductible: $${spouseIraMaxAllowed.toLocaleString()}.`;
       } else {
-        spouseIraDeductible = 0;
+        spouseIraMaxAllowed = 0;
         spouseIraPhaseOutStatus = 'none';
-        spouseIraPhaseOutNotice = `Spouse covered by workplace plan: phased out above $149,000 joint MAGI.`;
+        spouseIraPhaseOutNotice = `Spouse covered by workplace plan: phased out above $${limits.clientPhaseOutEnd.toLocaleString()} joint MAGI.`;
       }
     }
   }
 
-  // 5. Total Combined Pre-Tax Deduction & Final Optimized AGI
-  const totalPreTaxDeduction = primaryPlanContribution + clientIraDeductible + spouseIraDeductible;
-  const povertyFloor = get100PercentFPL(householdSize, taxYear) + 100;
-  const optimizedAgi =
-    grossAGI <= povertyFloor
-      ? Math.max(0, grossAGI - totalPreTaxDeduction)
-      : Math.max(povertyFloor, grossAGI - totalPreTaxDeduction);
+  const spouseIraDeductible = Math.min(spouseRequested, spouseIraMaxAllowed);
+  const spouseIraNonDeductible = Math.max(0, spouseRequested - spouseIraDeductible);
 
-  // 6. ACA Benchmark & Subsidy Math: Baseline vs Optimized (synced with taxYear & carrierId)
+  // Phase-Out Alert & Ideal 1-Click Fix Computation (respecting 138% FPL Safe Budget)
+  const hasPhaseOutWarning = clientIraNonDeductible > 0 || spouseIraNonDeductible > 0;
+  let idealSoloEmp = activeSoloEmp;
+  let idealSoloEr = activeSoloEr;
+  let idealSep = activeSep;
+  let idealSummary = '';
+
+  if (hasPhaseOutWarning) {
+    if (selectedVehicle === 'sep_ira') {
+      const targetNeeded = Math.min(
+        maxSafeDeductionBudget,
+        Math.max(0, grossAGI - (limits.clientPhaseOutStart - 500))
+      );
+      idealSep = Math.min(
+        limits.sepIraMax,
+        maxSafeDeductionBudget,
+        Math.max(activeSep, Math.floor(targetNeeded / 500) * 500)
+      );
+    } else {
+      const targetNeeded = Math.min(
+        maxSafeDeductionBudget,
+        Math.max(0, grossAGI - (limits.clientPhaseOutStart - 500))
+      );
+      if (activeSoloEmp + activeSoloEr < targetNeeded) {
+        idealSoloEmp = Math.min(
+          limits.soloEmployeeMax,
+          maxSafeDeductionBudget,
+          Math.max(activeSoloEmp, Math.floor(targetNeeded / 500) * 500)
+        );
+        const remainingNeeded = Math.max(0, targetNeeded - idealSoloEmp);
+        idealSoloEr = Math.min(
+          limits.soloEmployerMax,
+          Math.max(0, maxSafeDeductionBudget - idealSoloEmp),
+          Math.max(activeSoloEr, Math.floor(remainingNeeded / 500) * 500)
+        );
+      }
+    }
+  }
+
+  const idealPrimary =
+    selectedVehicle === 'sep_ira'
+      ? idealSep
+      : Math.min(idealSoloEmp + idealSoloEr, limits.solo401kMaxTotal, maxSafeDeductionBudget);
+  const idealMagiAfterPrimary = Math.max(0, grossAGI - idealPrimary);
+  const idealBudgetAfterPrimary = Math.max(0, maxSafeDeductionBudget - idealPrimary);
+
+  let idealClientMax = clientIraCap;
+  if (idealPrimary > 0) {
+    if (idealMagiAfterPrimary >= limits.clientPhaseOutEnd) {
+      idealClientMax = 0;
+    } else if (idealMagiAfterPrimary >= limits.clientPhaseOutStart) {
+      const r =
+        (limits.clientPhaseOutEnd - idealMagiAfterPrimary) /
+        (limits.clientPhaseOutEnd - limits.clientPhaseOutStart);
+      idealClientMax = Math.max(200, Math.round((clientIraCap * r) / 10) * 10);
+    }
+  }
+  const idealClientIraAmount = stackClientTradIra
+    ? Math.min(clientRequested || clientIraCap, idealClientMax, idealBudgetAfterPrimary)
+    : 0;
+  const idealMagiBeforeSpouse = Math.max(0, idealMagiAfterPrimary - idealClientIraAmount);
+  const idealBudgetAfterClient = Math.max(0, idealBudgetAfterPrimary - idealClientIraAmount);
+
+  let idealSpouseMax = spouseIraCap;
+  if (isMarried) {
+    const spStart = spouseCoveredByPlan ? limits.clientPhaseOutStart : limits.spousalPhaseOutStart;
+    const spEnd = spouseCoveredByPlan ? limits.clientPhaseOutEnd : limits.spousalPhaseOutEnd;
+    if (idealMagiBeforeSpouse >= spEnd) {
+      idealSpouseMax = 0;
+    } else if (idealMagiBeforeSpouse >= spStart) {
+      const r = (spEnd - idealMagiBeforeSpouse) / (spEnd - spStart);
+      idealSpouseMax = Math.max(200, Math.round((spouseIraCap * r) / 10) * 10);
+    }
+  }
+  const idealSpouseIraAmount =
+    isMarried && stackSpousalIra
+      ? Math.min(spouseRequested || spouseIraCap, idealSpouseMax, idealBudgetAfterClient)
+      : 0;
+
+  const boostedPrimary = idealPrimary > primaryPlanContribution;
+  if (hasPhaseOutWarning) {
+    if (boostedPrimary && idealClientIraAmount > 0 && idealSpouseIraAmount >= spouseRequested) {
+      idealSummary = `Boost ${selectedVehicle === 'sep_ira' ? 'SEP-IRA' : 'Solo 401(k)'} to $${idealPrimary.toLocaleString()} to drop intermediate MAGI to $${Math.round(idealMagiAfterPrimary).toLocaleString()} — unlocking full IRA deductibility with $0 phase-out.`;
+    } else if (boostedPrimary) {
+      idealSummary = `Max ${selectedVehicle === 'sep_ira' ? 'SEP-IRA' : 'Solo 401(k)'} to $${idealPrimary.toLocaleString()} and clear $${((clientRequested - idealClientIraAmount) + (spouseRequested - idealSpouseIraAmount)).toLocaleString()} of non-deductible IRA overflow (keep $${idealClientIraAmount.toLocaleString()} Client / $${idealSpouseIraAmount.toLocaleString()} Spousal deductible).`;
+    } else {
+      idealSummary = `Your ${selectedVehicle === 'sep_ira' ? 'SEP-IRA' : 'Solo 401(k)'} is already maximized — clear the trapped non-deductible IRA portion (Client: $${idealClientIraAmount.toLocaleString()}${isMarried ? ` · Spousal: $${idealSpouseIraAmount.toLocaleString()}` : ''}) to avoid after-tax IRA basis paperwork or re-route to Roth.`;
+    }
+  }
+
+  const totalNonDeductibleTrapped = clientIraNonDeductible + spouseIraNonDeductible;
+  const phaseOutWarningHeadline = hasPhaseOutWarning
+    ? `IRS Phase-Out Alert: $${totalNonDeductibleTrapped.toLocaleString()} of Your Traditional IRA Allocation Is Non-Deductible ($0 ACA Reduction)`
+    : '';
+
+  // Total Combined Pre-Tax Deduction & Final Optimized AGI (strictly >= 138% FPL unless Baseline AGI <= 138% FPL)
+  const totalPreTaxDeduction = primaryPlanContribution + clientIraDeductible + spouseIraDeductible;
+  const remainingSafeBudget = Math.max(0, maxSafeDeductionBudget - totalPreTaxDeduction);
+  const optimizedAgi =
+    grossAGI <= acaSafeFloor138
+      ? grossAGI
+      : Math.max(acaSafeFloor138, grossAGI - totalPreTaxDeduction);
+  const isAtAcaSafeFloor = grossAGI > acaSafeFloor138 && optimizedAgi <= acaSafeFloor138;
+
+  // ACA Benchmark & Subsidy Math: Baseline vs Optimized (synced with taxYear & carrierId)
   const baselineProjection = calculateAcaTierProjection({
     agi: grossAGI,
     householdSize,
@@ -836,24 +1276,52 @@ export function calculateSelfEmployedAcaStrategy(params: {
   const monthlySubsidyGain = Math.max(0, optimizedAca.monthlySubsidy - baselineAca.monthlySubsidy);
   const annualSubsidyGain = monthlySubsidyGain * 12;
 
-  // 7. Federal Tax Savings
+  // Federal Tax Savings
   const marginalTaxRate = getMarginalTaxRate(grossAGI, filingStatus);
   const annualTaxSavings = Math.round(totalPreTaxDeduction * marginalTaxRate);
   const totalAnnualBenefit = annualSubsidyGain + annualTaxSavings;
 
   return {
-    solo401kMaxTotal,
-    solo401kEmployeeMax: soloEmployeeCap,
-    solo401kEmployerMax: soloEmployerMax,
-    sepIraMax,
+    limits,
+    acaSafeFloor138,
+    target150FplAgi,
+    cliff400FplAgi,
+    maxSafeDeductionBudget,
+    remainingSafeBudget,
+    isAtAcaSafeFloor,
+    solo401kMaxTotal: limits.solo401kMaxTotal,
+    solo401kEmployeeMax: limits.soloEmployeeMax,
+    solo401kEmployerMax: limits.soloEmployerMax,
+    sepIraMax: limits.sepIraMax,
     traditionalIraStatLimit: clientIraCap,
     spousalIraStatLimit: spouseIraCap,
+    clientIraRequested: clientRequested,
     clientIraDeductible,
+    clientIraNonDeductible,
     clientIraPhaseOutStatus,
     clientIraPhaseOutNotice,
+    spouseIraRequested: spouseRequested,
     spouseIraDeductible,
+    spouseIraNonDeductible,
     spouseIraPhaseOutStatus,
     spouseIraPhaseOutNotice,
+    hasPhaseOutWarning,
+    phaseOutWarningHeadline,
+    idealFix: {
+      summary: idealSummary,
+      soloEmployee: idealSoloEmp,
+      soloEmployer: idealSoloEr,
+      sepContribution: idealSep,
+      stackClientIra: idealClientIraAmount > 0,
+      clientIraAmount: idealClientIraAmount,
+      stackSpouseIra: idealSpouseIraAmount > 0,
+      spouseIraAmount: idealSpouseIraAmount,
+    },
+    activeSoloEmployee: activeSoloEmp,
+    activeSoloEmployer: activeSoloEr,
+    activeSepContribution: activeSep,
+    activePrimaryPlanContribution: primaryPlanContribution,
+    magiAfterPrimaryPlan,
     totalPreTaxDeduction,
     baselineAgi: grossAGI,
     baselineFplPct: baselineAca.fplPct,
@@ -869,6 +1337,258 @@ export function calculateSelfEmployedAcaStrategy(params: {
     totalAnnualBenefit,
     marginalTaxRate,
     isSpousalLoopholeActive,
+  };
+}
+
+export interface MaxAcaOptimizationPreset {
+  soloEmployee: number;
+  soloEmployer: number;
+  sepContribution: number;
+  stackClientIra: boolean;
+  clientIraAmount: number;
+  stackSpouseIra: boolean;
+  spouseIraAmount: number;
+  projectedAgi: number;
+}
+
+export function computeMaxAcaOptimizationPreset(params: {
+  grossAGI: number;
+  netBusinessProfit: number;
+  clientAge: number;
+  spouseAge?: number;
+  filingStatus: FilingStatus;
+  householdSize: number;
+  selectedVehicle: 'stacked_solo' | 'sep_ira';
+  entityBasis: SelfEmployedEntityBasis;
+  scorpW2Wages?: number;
+  spouseCoveredByPlan?: boolean;
+  taxYear?: TaxYear;
+}): MaxAcaOptimizationPreset {
+  const {
+    grossAGI,
+    netBusinessProfit,
+    clientAge,
+    spouseAge = clientAge,
+    filingStatus,
+    householdSize,
+    selectedVehicle,
+    entityBasis,
+    scorpW2Wages,
+    spouseCoveredByPlan = false,
+    taxYear = '2027',
+  } = params;
+
+  const isMarried = filingStatus === 'married';
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
+  const maxSafeBudget = Math.max(0, grossAGI - acaSafeFloor138);
+
+  const limits = getSolo401kLimitsForYearAndAge(
+    taxYear,
+    clientAge,
+    netBusinessProfit,
+    entityBasis,
+    filingStatus,
+    scorpW2Wages
+  );
+
+  // First maximize primary business retirement deduction up to 138% FPL floor budget
+  let soloEmployee = 0;
+  let soloEmployer = 0;
+  let sepContribution = 0;
+  let usedPrimary = 0;
+
+  if (selectedVehicle === 'sep_ira') {
+    sepContribution = Math.min(limits.sepIraMax, maxSafeBudget);
+    usedPrimary = sepContribution;
+  } else {
+    soloEmployee = Math.min(limits.soloEmployeeMax, maxSafeBudget);
+    soloEmployer = Math.min(
+      limits.soloEmployerMax,
+      Math.max(0, limits.solo401kMaxTotal - soloEmployee),
+      Math.max(0, maxSafeBudget - soloEmployee)
+    );
+    usedPrimary = Math.min(soloEmployee + soloEmployer, limits.solo401kMaxTotal, maxSafeBudget);
+  }
+
+  let remainingBudget = Math.max(0, maxSafeBudget - usedPrimary);
+  const magiAfterPrimary = Math.max(0, grossAGI - usedPrimary);
+
+  // Next allocate Client Traditional IRA only up to deductible limit + remaining 138% FPL budget
+  const clientIraStat = getIRSLimitForAge(clientAge);
+  const clientIraRes = getTraditionalIRADeductionLimit(
+    magiAfterPrimary,
+    clientAge,
+    usedPrimary > 0,
+    filingStatus,
+    spouseCoveredByPlan,
+    taxYear
+  );
+  const clientIraAmount = Math.min(clientIraStat, clientIraRes.maxDeductible, remainingBudget);
+  remainingBudget = Math.max(0, remainingBudget - clientIraAmount);
+
+  // Next allocate Spousal IRA (when married) up to deductible limit + remaining 138% FPL budget
+  const spouseIraStat = getIRSLimitForAge(spouseAge);
+  let spouseIraAmount = 0;
+  if (isMarried && remainingBudget > 0) {
+    const magiBeforeSpouse = Math.max(0, magiAfterPrimary - clientIraAmount);
+    const spouseIraRes = getTraditionalIRADeductionLimit(
+      magiBeforeSpouse,
+      spouseAge,
+      spouseCoveredByPlan,
+      filingStatus,
+      usedPrimary > 0,
+      taxYear
+    );
+    spouseIraAmount = Math.min(spouseIraStat, spouseIraRes.maxDeductible, remainingBudget);
+  }
+
+  const totalUsed = usedPrimary + clientIraAmount + spouseIraAmount;
+  const projectedAgi = grossAGI <= acaSafeFloor138 ? grossAGI : Math.max(acaSafeFloor138, grossAGI - totalUsed);
+
+  return {
+    soloEmployee,
+    soloEmployer,
+    sepContribution,
+    stackClientIra: clientIraAmount > 0,
+    clientIraAmount,
+    stackSpouseIra: spouseIraAmount > 0,
+    spouseIraAmount,
+    projectedAgi,
+  };
+}
+
+export interface SliderThresholdJump {
+  thresholdLabel: string;
+  benefitLabel: string;
+  targetSliderValue: number;
+  deltaNeeded: number;
+  monthlyAptcGain: number;
+  isCloseProximity: boolean;
+}
+
+export function getNextBenefitThresholdForSlider(params: {
+  sliderType: 'primary_plan' | 'client_ira' | 'spouse_ira';
+  currentSliderValue: number;
+  sliderSafeCap: number;
+  currentOptimizedAgi: number;
+  grossAGI: number;
+  magiAfterPrimaryPlan: number;
+  clientAge: number;
+  householdSize: number;
+  taxYear?: TaxYear;
+  clientPhaseOutStart: number;
+  isClientIraActive?: boolean;
+}): SliderThresholdJump | null {
+  const {
+    sliderType,
+    currentSliderValue,
+    sliderSafeCap,
+    currentOptimizedAgi,
+    clientAge,
+    householdSize,
+    taxYear = '2027',
+    clientPhaseOutStart,
+    isClientIraActive = false,
+  } = params;
+
+  const headroom = Math.max(0, sliderSafeCap - currentSliderValue);
+  if (headroom <= 50) return null;
+
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
+  const currentAca = calculateAcaDetails(currentOptimizedAgi, householdSize, clientAge, taxYear);
+
+  type Candidate = {
+    thresholdLabel: string;
+    benefitLabel: string;
+    delta: number;
+    targetAgi: number;
+  };
+  const candidates: Candidate[] = [];
+
+  // 1. ACA FPL Thresholds (in descending AGI order, find exact delta to cross cleanly)
+  const fplBreakpoints: Array<{ mult: number; label: string; badge: string }> = [
+    { mult: 4.0, label: '400% FPL Cliff', badge: 'Unlocks ACA APTC Subsidies' },
+    { mult: 2.5, label: '250% FPL Tier', badge: 'Unlocks 73% Silver CSR + Higher APTC' },
+    { mult: 2.0, label: '200% FPL Tier', badge: 'Unlocks 87% Silver CSR ($800 Ded.)' },
+    { mult: 1.495, label: '150% FPL Tier', badge: 'Unlocks 94% Silver CSR ($0 Ded.)' },
+  ];
+
+  for (const bp of fplBreakpoints) {
+    const cutoffAgi = Math.floor(fpl100 * bp.mult);
+    if (cutoffAgi >= acaSafeFloor138 && currentOptimizedAgi > cutoffAgi) {
+      const delta = currentOptimizedAgi - cutoffAgi;
+      if (delta > 0 && delta <= headroom) {
+        candidates.push({
+          thresholdLabel: bp.label,
+          benefitLabel: bp.badge,
+          delta,
+          targetAgi: cutoffAgi,
+        });
+      }
+    }
+  }
+
+  // 2. IRS Traditional IRA Active-Participant Phase-Out Unlock (for Solo 401k / SEP sliders)
+  if (
+    sliderType === 'primary_plan' &&
+    isClientIraActive &&
+    currentSliderValue > 0 &&
+    params.magiAfterPrimaryPlan >= clientPhaseOutStart
+  ) {
+    const unlockAgi = clientPhaseOutStart - 100;
+    const deltaToUnlock = params.magiAfterPrimaryPlan - unlockAgi;
+    if (deltaToUnlock > 0 && deltaToUnlock <= headroom) {
+      candidates.push({
+        thresholdLabel: 'IRS IRA Unlock',
+        benefitLabel: 'Unlocks Full Deductible Trad IRA',
+        delta: deltaToUnlock,
+        targetAgi: Math.max(acaSafeFloor138, currentOptimizedAgi - deltaToUnlock),
+      });
+    }
+  }
+
+  // 3. Max 138% FPL Safe Floor option if still above floor and no closer breakpoint exists (or within close range)
+  if (currentOptimizedAgi > acaSafeFloor138) {
+    const deltaTo138 = Math.min(headroom, currentOptimizedAgi - acaSafeFloor138);
+    if (deltaTo138 > 0) {
+      const resultingAgi = Math.max(acaSafeFloor138, currentOptimizedAgi - deltaTo138);
+      const nextAca = calculateAcaDetails(resultingAgi, householdSize, clientAge, taxYear);
+      const gain = Math.max(0, nextAca.monthlySubsidy - currentAca.monthlySubsidy);
+      if (candidates.length === 0 && (gain > 0 || resultingAgi === acaSafeFloor138)) {
+        candidates.push({
+          thresholdLabel: resultingAgi === acaSafeFloor138 ? '138% FPL Max ACA' : 'Max Slider ACA',
+          benefitLabel: gain > 0 ? `+$${gain.toLocaleString()}/mo APTC Boost` : 'Lowest Safe ACA MAGI',
+          delta: deltaTo138,
+          targetAgi: resultingAgi,
+        });
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Choose nearest actionable breakpoint
+  candidates.sort((a, b) => a.delta - b.delta);
+  const best = candidates[0];
+  const targetSliderValue = Math.min(sliderSafeCap, currentSliderValue + best.delta);
+  const actualDelta = Math.max(0, targetSliderValue - currentSliderValue);
+  if (actualDelta <= 0) return null;
+
+  const afterAca = calculateAcaDetails(best.targetAgi, householdSize, clientAge, taxYear);
+  const monthlyAptcGain = Math.max(0, afterAca.monthlySubsidy - currentAca.monthlySubsidy);
+
+  return {
+    thresholdLabel: best.thresholdLabel,
+    benefitLabel:
+      monthlyAptcGain > 0
+        ? `${best.benefitLabel} (+$${monthlyAptcGain.toLocaleString()}/mo APTC)`
+        : best.benefitLabel,
+    targetSliderValue,
+    deltaNeeded: actualDelta,
+    monthlyAptcGain,
+    isCloseProximity: actualDelta <= 5000,
   };
 }
 
