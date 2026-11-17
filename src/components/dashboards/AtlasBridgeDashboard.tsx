@@ -7,6 +7,9 @@ import {
   getMarginalTaxRate,
   calculateAcaTierProjection,
   getTraditionalIRADeductionLimit,
+  computeAtlasBridgeIraMilestones,
+  computeAtlasBridgeMaxPreset,
+  SliderMilestonePlan,
 } from '../../utils/calculations';
 import { REGIONAL_HEALTH_CARRIERS } from '../../utils/constants';
 import { SoundFX } from '../../utils/audio';
@@ -37,11 +40,11 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
 
   const initialIRA = clientData.existingAnnuityCash > 0
     ? clientData.existingAnnuityCash
-    : Math.min(1000, iraCap);
+    : 0;
 
   const initialSpouseIRA = (clientData.spouseExistingAnnuityCash && clientData.spouseExistingAnnuityCash > 0)
     ? clientData.spouseExistingAnnuityCash
-    : (isMarried ? Math.min(1000, spouseIraCap) : 0);
+    : 0;
 
   const [iraContrib, setIraContrib] = useState<number>(Math.min(initialIRA, iraCap));
   const [spouseIraContrib, setSpouseIraContrib] = useState<number>(Math.min(initialSpouseIRA, spouseIraCap));
@@ -67,11 +70,11 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const origAca = origProjection.baseAca;
   const origSilverTier = origProjection.tiers.silver;
 
-  // Poverty floor for pre-tax deductions ($100 above 100% FPL)
-  const povertyFloor = origAca.fpl100 + 100;
-  const maxSafeTotalPreTax = Math.max(0, clientData.grossAGI - povertyFloor);
+  // 138% FPL Medicaid-safe floor for pre-tax deductions
+  const safeFloor138 = Math.ceil(origAca.fpl100 * 1.38);
+  const maxSafeTotalPreTax = Math.max(0, clientData.grossAGI - safeFloor138);
 
-  // Trad-IRA & Qualified Annuity Pre-Tax Diversion (Clamped to poverty floor)
+  // Trad-IRA & Qualified Annuity Pre-Tax Diversion (Clamped to 138% FPL safe floor)
   const effectiveMaxClientIRA = Math.max(0, Math.min(iraCap, maxSafeTotalPreTax));
   const actualClientIRA = Math.min(iraContrib, effectiveMaxClientIRA);
 
@@ -84,25 +87,27 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const isClientCovered = hasClient401k;
   const isSpouseCovered = hasSpouse401k;
 
-  // Primary Client IRA
+  // Primary Client IRA (tax-year aware)
   const clientIraDeductionInfo = getTraditionalIRADeductionLimit(
     clientData.grossAGI,
     clientData.clientAge,
     isClientCovered,
     clientData.filingStatus,
-    isSpouseCovered
+    isSpouseCovered,
+    clientData.taxYear
   );
   const deductibleClientIRA = Math.min(actualClientIRA, clientIraDeductionInfo.maxDeductible);
   const afterTaxClientIRA = Math.max(0, actualClientIRA - deductibleClientIRA);
 
-  // Spouse IRA (under IRC § 219(c))
+  // Spouse IRA (under IRC § 219(c), tax-year aware)
   const spouseIraDeductionInfo = isMarried
     ? getTraditionalIRADeductionLimit(
         clientData.grossAGI,
         spouseAge,
         isSpouseCovered,
         clientData.filingStatus,
-        isClientCovered
+        isClientCovered,
+        clientData.taxYear
       )
     : null;
   const deductibleSpouseIRA = spouseIraDeductionInfo ? Math.min(actualSpouseIRA, spouseIraDeductionInfo.maxDeductible) : 0;
@@ -122,9 +127,9 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
 
   // Adjusted ACA (identical canonical projection engine as Traditional ACA Dashboard)
   const adjustedMAGI =
-    clientData.grossAGI <= povertyFloor
+    clientData.grossAGI <= safeFloor138
       ? clientData.grossAGI
-      : Math.max(povertyFloor, clientData.grossAGI - totalPreTaxMAGIReduction);
+      : Math.max(safeFloor138, clientData.grossAGI - totalPreTaxMAGIReduction);
   const adjProjection = calculateAcaTierProjection({
     agi: adjustedMAGI,
     householdSize,
@@ -180,6 +185,79 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
   const atlasAnnualPrem = (monthlyDPC + displayPrem) * 12;
 
   const currentCarrier = REGIONAL_HEALTH_CARRIERS.find((c) => c.id === clientData.selectedHealthCarrier) || REGIONAL_HEALTH_CARRIERS[0];
+
+  // Engine-Simulated Multi-Step Milestone Ladders + Next-Benefit Jumps ($0 -> Max Deductible / Safe Cap)
+  const clientIraMilestonePlan: SliderMilestonePlan = computeAtlasBridgeIraMilestones({
+    sliderRole: 'client',
+    grossAGI: clientData.grossAGI,
+    clientAge: clientData.clientAge,
+    spouseAge,
+    filingStatus: clientData.filingStatus,
+    householdSize,
+    currentClientIra: actualClientIRA,
+    currentSpouseIra: actualSpouseIRA,
+    effectiveMaxClientIRA,
+    effectiveMaxSpouseIRA,
+    clientMaxDeductible: clientIraDeductionInfo.maxDeductible,
+    spouseMaxDeductible: spouseIraDeductionInfo ? spouseIraDeductionInfo.maxDeductible : 0,
+    taxYear: clientData.taxYear,
+    carrierId: clientData.selectedHealthCarrier,
+  });
+
+  const spouseIraMilestonePlan: SliderMilestonePlan = isMarried
+    ? computeAtlasBridgeIraMilestones({
+        sliderRole: 'spouse',
+        grossAGI: clientData.grossAGI,
+        clientAge: clientData.clientAge,
+        spouseAge,
+        filingStatus: clientData.filingStatus,
+        householdSize,
+        currentClientIra: actualClientIRA,
+        currentSpouseIra: actualSpouseIRA,
+        effectiveMaxClientIRA,
+        effectiveMaxSpouseIRA,
+        clientMaxDeductible: clientIraDeductionInfo.maxDeductible,
+        spouseMaxDeductible: spouseIraDeductionInfo ? spouseIraDeductionInfo.maxDeductible : 0,
+        taxYear: clientData.taxYear,
+        carrierId: clientData.selectedHealthCarrier,
+      })
+    : { nextJump: null, milestones: [] };
+
+  const maxAcaPreset = computeAtlasBridgeMaxPreset({
+    grossAGI: clientData.grossAGI,
+    clientAge: clientData.clientAge,
+    spouseAge,
+    filingStatus: clientData.filingStatus,
+    householdSize,
+    isClientCovered,
+    isSpouseCovered,
+    taxYear: clientData.taxYear,
+  });
+
+  const isAlreadyAtMaxPreset =
+    actualClientIRA === maxAcaPreset.clientIra &&
+    (!isMarried || actualSpouseIRA === maxAcaPreset.spouseIra);
+
+  const handleApplyMaxPreset = () => {
+    SoundFX.playUnlock();
+    setIraContrib(maxAcaPreset.clientIra);
+    if (isMarried) {
+      setSpouseIraContrib(maxAcaPreset.spouseIra);
+    }
+  };
+
+  const handleResetSliders = () => {
+    SoundFX.playClick();
+    setIraContrib(0);
+    if (isMarried) {
+      setSpouseIraContrib(0);
+    }
+  };
+
+  const is2026 = clientData.taxYear === '2026';
+  const singlePhaseStartLabel = is2026 ? '$81,000' : '$83,000';
+  const singlePhaseEndLabel = is2026 ? '$91,000' : '$93,000';
+  const mfjPhaseStartLabel = is2026 ? '$129,000' : '$133,000';
 
   // Adjust if statutory limits change or poverty floor clamps
   useEffect(() => {
@@ -338,6 +416,106 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
     displayOop,
   ]);
 
+  // Reusable Next-Benefit Jump + Clickable Milestone Ladder ($0 -> Max) for Trad-IRA Sliders
+  const renderIraMilestoneControls = (
+    plan: SliderMilestonePlan,
+    onSelectValue: (targetVal: number) => void
+  ) => {
+    if (plan.milestones.length === 0 && !plan.nextJump) return null;
+    const { nextJump, milestones } = plan;
+
+    return (
+      <div className="space-y-1.5 pt-1.5">
+        {nextJump && (
+          <div
+            className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center justify-between gap-2 ${
+              nextJump.isCloseProximity
+                ? 'bg-emerald-500/12 border-emerald-400/50'
+                : 'bg-cyan-500/10 border-cyan-500/35'
+            }`}
+          >
+            <div className="text-[10.5px] leading-snug">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className={`font-extrabold ${
+                    nextJump.isCloseProximity ? 'text-emerald-300' : 'text-cyan-300'
+                  }`}
+                >
+                  {nextJump.isCloseProximity ? 'Close Threshold: ' : 'Next Benefit: '}
+                  {nextJump.thresholdLabel}
+                </span>
+                {nextJump.monthlyPremiumDropFromCurrent > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 font-bold text-[9.5px] tabular-nums">
+                    -${nextJump.monthlyPremiumDropFromCurrent.toLocaleString()}/mo ACA Prem.
+                  </span>
+                )}
+              </div>
+              <span className="block text-[10px] text-slate-300">{nextJump.benefitLabel}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                SoundFX.playUnlock();
+                onSelectValue(nextJump.targetSliderValue);
+              }}
+              className={`px-2 py-1 rounded-md text-[10px] font-extrabold whitespace-nowrap shrink-0 cursor-pointer transition-colors tabular-nums ${
+                nextJump.isCloseProximity
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-navy-950'
+                  : 'bg-cyan-500/25 hover:bg-cyan-500/40 border border-cyan-400/50 text-cyan-200'
+              }`}
+            >
+              Jump to ${nextJump.targetSliderValue.toLocaleString()} (+${nextJump.deltaFromCurrent.toLocaleString()})
+            </button>
+          </div>
+        )}
+
+        {milestones.length > 0 && (
+          <div className="bg-navy-950/80 border border-navy-800 rounded-lg px-2 py-1.5 space-y-1">
+            <div className="flex items-center justify-between text-[9.5px] text-slate-400 font-semibold">
+              <span>Tiered ACA Bonus Ladder ($0 → Max)</span>
+              <span>Direct Silver Prem. Effect</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {milestones.map((m) => (
+                <button
+                  key={`${m.id}-${m.targetSliderValue}`}
+                  type="button"
+                  onClick={() => {
+                    SoundFX.playUnlock();
+                    onSelectValue(m.targetSliderValue);
+                  }}
+                  title={m.benefitLabel}
+                  className={`px-2 py-1 rounded-md border text-left transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    m.isUnlocked
+                      ? 'bg-emerald-500/15 border-emerald-500/45 text-emerald-200 hover:bg-emerald-500/25'
+                      : nextJump?.targetSliderValue === m.targetSliderValue
+                      ? 'bg-cyan-500/15 border-cyan-400/55 text-cyan-100 hover:bg-cyan-500/25'
+                      : 'bg-navy-900 border-navy-700 text-slate-200 hover:border-gold-400/60 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-1 text-[9.5px] font-extrabold leading-tight">
+                    {m.isUnlocked && <i className="fa-solid fa-check text-[8.5px] text-emerald-400"></i>}
+                    <span>{m.shortLabel}</span>
+                  </div>
+                  <div className="text-[9px] font-mono tabular-nums text-slate-300 leading-tight mt-0.5">
+                    ${m.targetSliderValue.toLocaleString()}{' '}
+                    <span className={m.isUnlocked ? 'text-emerald-400' : 'text-cyan-300'}>
+                      {m.isUnlocked
+                        ? `· $${m.resultingSilverMonthlyPremium}/mo`
+                        : m.monthlyPremiumDropFromCurrent > 0
+                        ? `· -$${m.monthlyPremiumDropFromCurrent}/mo`
+                        : `· +$${m.deltaFromCurrent.toLocaleString()}`}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8">
       <section className="glass-card p-5 sm:p-8 border-l-4 border-l-gold-500 space-y-6 sm:space-y-8 glow-gold relative overflow-hidden">
@@ -427,7 +605,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   />
                   <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium px-0.5 tabular-nums">
                     <span>$0 Min</span>
-                    <span>100% FPL: ${origAca.fpl100.toLocaleString()}</span>
+                    <span>138% Safe Floor: ${safeFloor138.toLocaleString()}</span>
                     <span>400% Cliff: ${(origAca.fpl100 * 4).toLocaleString()}</span>
                   </div>
                 </div>
@@ -520,8 +698,8 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                   {/* Next Threshold / Cliff Headroom */}
                   <div className="flex items-center justify-between text-[10px] pt-1 border-t border-navy-800/80">
                     <span className="text-slate-400">
-                      {adjAca.exactFplPct <= 138
-                        ? 'Medicaid Threshold Range (≤138% FPL)'
+                      {adjustedMAGI <= safeFloor138 || adjAca.exactFplPct <= 138
+                        ? '138% FPL Medicaid-Safe Floor (Protected)'
                         : nextCsrDollarsNeeded > 0
                         ? `To ${nextCsrLabel}:`
                         : 'Silver CSR Status:'}
@@ -549,26 +727,67 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
               </div>
             </div>
 
-            {/* Right Card: Pre-Tax Diversion Slider (Trad-IRA / Qual-Annuity - original format) */}
+            {/* Right Card: Pre-Tax Diversion Slider (Trad-IRA / Qual-Annuity) */}
             <div className="bg-navy-950/90 p-5 rounded-2xl border border-gold-500/40 space-y-4 shadow-xl glow-gold flex flex-col justify-between">
               <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-navy-800 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-gold-500/10 border border-gold-500/30 flex items-center justify-center text-gold-400 text-sm">
-                      <i className="fa-solid fa-piggy-bank"></i>
+                <div className="space-y-2.5 border-b border-navy-800 pb-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-gold-500/10 border border-gold-500/30 flex items-center justify-center text-gold-400 text-sm shrink-0">
+                        <i className="fa-solid fa-piggy-bank"></i>
+                      </div>
+                      <div>
+                        <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                          <span>Pre-Tax Diversion Slider</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-400">
+                          IRC § 219 Qualified Annuity / Traditional IRA Allocation {isMarried && '· Spousal IRA (IRC § 219(c))'}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                        <span>Pre-Tax Diversion Slider</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-400">
-                        IRC § 219 Qualified Annuity / Traditional IRA Allocation {isMarried && '· Spousal IRA (IRC § 219(c))'}
-                      </p>
+                    <div className="text-right shrink-0">
+                      <span className="text-[9.5px] text-slate-400 uppercase font-semibold block">{isMarried ? 'Combined IRA' : 'IRA Contribution'}</span>
+                      <strong className="text-gold-400 font-black text-sm sm:text-base tabular-nums font-mono">${combinedIRA.toLocaleString()} / yr</strong>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[9.5px] text-slate-400 uppercase font-semibold block">{isMarried ? 'Combined IRA' : 'IRA Contribution'}</span>
-                    <strong className="text-gold-400 font-black text-sm sm:text-base tabular-nums font-mono">${combinedIRA.toLocaleString()} / yr</strong>
+
+                  {/* Quick Optimization Preset Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                    <span className="text-[10px] text-slate-400 tabular-nums">
+                      138% Safe Cap: <strong className="text-slate-200">${safeFloor138.toLocaleString()}</strong> MAGI floor
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleResetSliders}
+                        className="px-2.5 py-1 rounded-md bg-navy-900 hover:bg-navy-800 border border-navy-700 text-slate-300 hover:text-white text-[10.5px] font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                      >
+                        <i className="fa-solid fa-rotate-left mr-1"></i> Reset ($0)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleApplyMaxPreset}
+                        disabled={
+                          clientData.grossAGI <= safeFloor138 ||
+                          (maxAcaPreset.clientIra === 0 && maxAcaPreset.spouseIra === 0) ||
+                          isAlreadyAtMaxPreset
+                        }
+                        className={`px-2.5 py-1 rounded-md text-[10.5px] font-extrabold whitespace-nowrap shrink-0 transition-all flex items-center gap-1 ${
+                          clientData.grossAGI <= safeFloor138 ||
+                          (maxAcaPreset.clientIra === 0 && maxAcaPreset.spouseIra === 0) ||
+                          isAlreadyAtMaxPreset
+                            ? 'bg-emerald-500/15 border border-emerald-500/35 text-emerald-300/75 cursor-default'
+                            : 'bg-emerald-500 hover:bg-emerald-400 text-navy-950 shadow-sm shadow-emerald-500/20 cursor-pointer'
+                        }`}
+                      >
+                        <i className="fa-solid fa-bolt"></i>
+                        <span>
+                          {isAlreadyAtMaxPreset && (maxAcaPreset.clientIra > 0 || maxAcaPreset.spouseIra > 0)
+                            ? 'Maxed at 138% Floor / IRS Cap'
+                            : 'Maximize ACA (138% FPL Floor)'}
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -615,6 +834,7 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                       <span className="text-center text-slate-300">${Math.round(effectiveMaxClientIRA / 2).toLocaleString()}</span>
                       <span className="text-right text-gold-400 font-bold">Max: ${effectiveMaxClientIRA.toLocaleString()}</span>
                     </div>
+                    {renderIraMilestoneControls(clientIraMilestonePlan, (val) => setIraContrib(val))}
                   </div>
 
                   {/* Spouse Trad-IRA Slider (IRC § 219(c) Kay Bailey Hutchison Spousal IRA) */}
@@ -660,15 +880,16 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                         <span className="text-center text-slate-300">${Math.round(effectiveMaxSpouseIRA / 2).toLocaleString()}</span>
                         <span className="text-right text-amber-400 font-bold">Max: ${effectiveMaxSpouseIRA.toLocaleString()}</span>
                       </div>
+                      {renderIraMilestoneControls(spouseIraMilestonePlan, (val) => setSpouseIraContrib(val))}
                     </div>
                   )}
 
-                  {/* Poverty Floor Safeguard Warning (if pre-tax room is constrained by poverty level) */}
+                  {/* 138% FPL Safe Floor Safeguard Warning (if pre-tax room is constrained) */}
                   {maxSafeTotalPreTax < (iraCap + (isMarried ? spouseIraCap : 0)) && (
                     <div className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5">
                       <i className="fa-solid fa-shield-halved text-amber-400 text-xs shrink-0"></i>
                       <span>
-                        <strong>Poverty Floor Protected:</strong> Pre-tax diversion capped at $100 above 100% FPL (${povertyFloor.toLocaleString()}) to safeguard ACA tax credit eligibility.
+                        <strong>138% FPL Safe Floor Protected:</strong> Pre-tax diversion is capped at 138% FPL (${safeFloor138.toLocaleString()}) to safeguard ACA subsidy eligibility without Medicaid displacement.
                       </span>
                     </div>
                   )}
@@ -678,7 +899,10 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                     {isMarried ? (
                       clientIraDeductionInfo.phaseOutStatus === 'full' && (!spouseIraDeductionInfo || spouseIraDeductionInfo.phaseOutStatus === 'full') ? (
                         <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                          <i className="fa-solid fa-circle-check text-emerald-400"></i> Full Deduction Qualified (Joint MAGI &lt; $130,000)
+                          <i className="fa-solid fa-circle-check text-emerald-400"></i>{' '}
+                          {!isClientCovered && !isSpouseCovered
+                            ? 'Full Deduction Qualified (No Workplace 401k Restriction)'
+                            : `Full Deduction Qualified (Joint MAGI ≤ ${mfjPhaseStartLabel})`}
                         </span>
                       ) : clientIraDeductionInfo.phaseOutStatus === 'none' && (!spouseIraDeductionInfo || spouseIraDeductionInfo.phaseOutStatus === 'none') ? (
                         <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
@@ -692,15 +916,18 @@ export const AtlasBridgeDashboard: React.FC<AtlasBridgeDashboardProps> = ({
                     ) : (
                       clientIraDeductionInfo.phaseOutStatus === 'full' ? (
                         <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                          <i className="fa-solid fa-circle-check text-emerald-400"></i> Full Deduction Qualified (MAGI &lt; $81,000)
+                          <i className="fa-solid fa-circle-check text-emerald-400"></i>{' '}
+                          {!isClientCovered
+                            ? 'Full Deduction Qualified (No Workplace 401k Restriction)'
+                            : `Full Deduction Qualified (MAGI ≤ ${singlePhaseStartLabel})`}
                         </span>
                       ) : clientIraDeductionInfo.phaseOutStatus === 'partial' ? (
                         <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                          <i className="fa-solid fa-triangle-exclamation text-amber-400"></i> Partial Deduction ($81k-$91k) · Max ${clientIraDeductionInfo.maxDeductible.toLocaleString()} Deductible
+                          <i className="fa-solid fa-triangle-exclamation text-amber-400"></i> Partial Deduction ({singlePhaseStartLabel}–{singlePhaseEndLabel}) · Max ${clientIraDeductionInfo.maxDeductible.toLocaleString()} Deductible
                         </span>
                       ) : (
                         <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                          <i className="fa-solid fa-ban text-rose-400"></i> $0 Deduction · MAGI &gt; $91,000 Phase-Out Limit
+                          <i className="fa-solid fa-ban text-rose-400"></i> $0 Deduction · MAGI ≥ {singlePhaseEndLabel} Phase-Out Limit
                         </span>
                       )
                     )}

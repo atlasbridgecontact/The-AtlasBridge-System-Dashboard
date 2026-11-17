@@ -1458,138 +1458,610 @@ export function computeMaxAcaOptimizationPreset(params: {
   };
 }
 
-export interface SliderThresholdJump {
+export type SliderMilestoneId =
+  | 'cliff_400'
+  | 'tier_300'
+  | 'csr_250'
+  | 'csr_200'
+  | 'irs_ira_unlock'
+  | 'csr_150'
+  | 'floor_138'
+  | 'tiered_step'
+  | 'slider_max';
+
+export interface SliderMilestoneItem {
+  id: SliderMilestoneId;
   thresholdLabel: string;
+  shortLabel: string;
   benefitLabel: string;
   targetSliderValue: number;
-  deltaNeeded: number;
+  deltaFromCurrent: number;
   monthlyAptcGain: number;
+  resultingFplPct: number;
+  resultingSilverMonthlyPremium: number;
+  monthlyPremiumDropFromZero: number;
+  monthlyPremiumDropFromCurrent: number;
+  resultingDeductible: number;
   isCloseProximity: boolean;
+  isUnlocked: boolean;
 }
 
-export function getNextBenefitThresholdForSlider(params: {
-  sliderType: 'primary_plan' | 'client_ira' | 'spouse_ira';
+export interface SliderMilestonePlan {
+  nextJump: SliderMilestoneItem | null;
+  milestones: SliderMilestoneItem[];
+}
+
+interface MilestoneSample {
+  val: number;
+  agi: number;
+  fplPct: number;
+  monthlySubsidy: number;
+  silverMonthlyPremium: number;
+  silverDeductible: number;
+  silverOopMax: number;
+  magiAfterPrimaryPlan: number;
+}
+
+interface CandidateMilestoneStop {
+  id: SliderMilestoneId;
+  thresholdLabel: string;
+  shortLabel: string;
+  benefitLabel: string;
+  sample: MilestoneSample;
+}
+
+const ACA_MILESTONE_DEFINITIONS: Array<{
+  id: Exclude<SliderMilestoneId, 'irs_ira_unlock' | 'floor_138' | 'tiered_step' | 'slider_max'>;
+  mult: number;
+  thresholdLabel: string;
+  shortLabel: string;
+  benefitLabel: string;
+}> = [
+  {
+    id: 'cliff_400',
+    mult: 4.0,
+    thresholdLabel: '400% FPL Cliff',
+    shortLabel: '400% Cliff',
+    benefitLabel: 'Unlocks ACA APTC Subsidies',
+  },
+  {
+    id: 'tier_300',
+    mult: 3.0,
+    thresholdLabel: '300% FPL Tier',
+    shortLabel: '300% FPL',
+    benefitLabel: 'Lowers Expected Cap to 9.20%',
+  },
+  {
+    id: 'csr_250',
+    mult: 2.5,
+    thresholdLabel: '250% FPL Tier',
+    shortLabel: '250% · 73% CSR',
+    benefitLabel: 'Unlocks 73% Silver CSR ($2,500 Ded.)',
+  },
+  {
+    id: 'csr_200',
+    mult: 2.0,
+    thresholdLabel: '200% FPL Tier',
+    shortLabel: '200% · 87% CSR',
+    benefitLabel: 'Unlocks 87% Silver CSR ($800 Ded.)',
+  },
+  {
+    id: 'csr_150',
+    mult: 1.5,
+    thresholdLabel: '150% FPL Tier',
+    shortLabel: '150% · 94% CSR',
+    benefitLabel: 'Unlocks 94% Silver CSR ($0 Ded.)',
+  },
+];
+
+function hasSignificantAcaDelta(
+  prev: MilestoneSample,
+  next: MilestoneSample,
+  options: { minAptcOrPrem?: number; allowCostSharingOnly?: boolean } = {}
+): boolean {
+  const minDelta = options.minAptcOrPrem ?? 10;
+  const allowCsr = options.allowCostSharingOnly ?? true;
+  if (next.agi >= prev.agi) return false;
+
+  const premDrop = prev.silverMonthlyPremium - next.silverMonthlyPremium;
+  const dedCut = prev.silverDeductible - next.silverDeductible;
+  const oopCut = prev.silverOopMax - next.silverOopMax;
+
+  if (allowCsr && (dedCut > 0 || oopCut > 0)) return true;
+  return premDrop >= minDelta;
+}
+
+function buildTieredMilestonePlan(params: {
+  samples: MilestoneSample[];
+  currentSample: MilestoneSample;
   currentSliderValue: number;
   sliderSafeCap: number;
-  currentOptimizedAgi: number;
-  grossAGI: number;
-  magiAfterPrimaryPlan: number;
-  clientAge: number;
-  householdSize: number;
-  taxYear?: TaxYear;
-  clientPhaseOutStart: number;
-  isClientIraActive?: boolean;
-}): SliderThresholdJump | null {
+  fpl100: number;
+  safeFloor138: number;
+  checkIraUnlock?: boolean;
+  clientPhaseOutStart?: number;
+  closeProximityLimit: number;
+  maxLabel?: { thresholdLabel: string; shortLabel: string; benefitLabel: string };
+}): SliderMilestonePlan {
   const {
-    sliderType,
+    samples,
+    currentSample,
     currentSliderValue,
     sliderSafeCap,
-    currentOptimizedAgi,
-    clientAge,
-    householdSize,
-    taxYear = '2027',
-    clientPhaseOutStart,
-    isClientIraActive = false,
+    fpl100,
+    safeFloor138,
+    checkIraUnlock = false,
+    clientPhaseOutStart = 0,
+    closeProximityLimit,
+    maxLabel = {
+      thresholdLabel: 'Slider Safe Max',
+      shortLabel: 'Safe Max',
+      benefitLabel: 'Max ACA Savings Within Cap',
+    },
   } = params;
 
-  const headroom = Math.max(0, sliderSafeCap - currentSliderValue);
-  if (headroom <= 50) return null;
+  if (samples.length < 2 || sliderSafeCap <= 0) {
+    return { nextJump: null, milestones: [] };
+  }
+
+  const res0 = samples[0];
+  const resMax = samples[samples.length - 1];
+
+  // If the entire range from $0 -> sliderSafeCap creates no meaningful ACA change at all, return empty
+  if (!hasSignificantAcaDelta(res0, resMax, { minAptcOrPrem: 8, allowCostSharingOnly: true })) {
+    return { nextJump: null, milestones: [] };
+  }
+
+  const foundByTarget = new Map<number, CandidateMilestoneStop>();
+
+  // 1. Structural ACA FPL breakpoints (require genuine ACA Silver premium or CSR benefit vs prior stop)
+  for (const bp of ACA_MILESTONE_DEFINITIONS) {
+    const cutoffAgi = Math.floor(fpl100 * bp.mult);
+    if (cutoffAgi < safeFloor138) continue;
+    if (res0.agi <= cutoffAgi) continue;
+
+    const firstHit = samples.find((s) => s.val > 0 && s.agi <= cutoffAgi);
+    if (!firstHit) continue;
+
+    const prevSample = samples
+      .slice()
+      .reverse()
+      .find((s) => s.val < firstHit.val && foundByTarget.has(s.val)) || res0;
+
+    // 300% FPL does not alter deductibles/OOP, so require a meaningful monthly premium drop & avoid trivial micro-nudges
+    if (bp.id === 'tier_300') {
+      const premDropFromPrev = prevSample.silverMonthlyPremium - firstHit.silverMonthlyPremium;
+      const minNeeded = firstHit.val < 500 ? 25 : 15;
+      if (premDropFromPrev < minNeeded) {
+        continue;
+      }
+    } else {
+      if (!hasSignificantAcaDelta(prevSample, firstHit, { minAptcOrPrem: 10, allowCostSharingOnly: true })) {
+        continue;
+      }
+    }
+
+    foundByTarget.set(firstHit.val, {
+      id: bp.id,
+      thresholdLabel: bp.thresholdLabel,
+      shortLabel: bp.shortLabel,
+      benefitLabel: bp.benefitLabel,
+      sample: firstHit,
+    });
+  }
+
+  // 2. IRS Traditional IRA Active-Participant Phase-Out Unlock (for Solo 401k / SEP when client IRA > 0)
+  if (checkIraUnlock && clientPhaseOutStart > 0 && res0.magiAfterPrimaryPlan >= clientPhaseOutStart) {
+    const firstUnlock = samples.find((s) => s.val > 0 && s.magiAfterPrimaryPlan < clientPhaseOutStart);
+    if (firstUnlock && !foundByTarget.has(firstUnlock.val)) {
+      if (hasSignificantAcaDelta(res0, firstUnlock, { minAptcOrPrem: 12, allowCostSharingOnly: true })) {
+        foundByTarget.set(firstUnlock.val, {
+          id: 'irs_ira_unlock',
+          thresholdLabel: 'IRS IRA Unlock',
+          shortLabel: 'IRA Unlock',
+          benefitLabel: 'Unlocks 100% Deductible Trad IRA',
+          sample: firstUnlock,
+        });
+      }
+    }
+  }
+
+  // 3. 138% FPL Safe Floor Milestone (only if reaching 138% adds real Silver premium savings beyond prior stop)
+  if (res0.agi > safeFloor138) {
+    const firstFloorHit = samples.find((s) => s.val > 0 && s.agi <= safeFloor138);
+    if (firstFloorHit && !foundByTarget.has(firstFloorHit.val)) {
+      const priorStops = Array.from(foundByTarget.values())
+        .filter((s) => s.sample.val < firstFloorHit.val)
+        .sort((a, b) => a.sample.val - b.sample.val);
+      const prevSample = priorStops.length > 0 ? priorStops[priorStops.length - 1].sample : res0;
+      if (hasSignificantAcaDelta(prevSample, firstFloorHit, { minAptcOrPrem: 10, allowCostSharingOnly: true })) {
+        foundByTarget.set(firstFloorHit.val, {
+          id: 'floor_138',
+          thresholdLabel: '138% FPL Safe Max',
+          shortLabel: '138% Floor',
+          benefitLabel: 'Max ACA Savings at 138% Safe Floor',
+          sample: firstFloorHit,
+        });
+      }
+    }
+  }
+
+  // 4. Cap endpoint (Safe Max) if it adds significant Silver premium savings over the highest milestone
+  const currentStops = Array.from(foundByTarget.values()).sort((a, b) => a.sample.val - b.sample.val);
+  const lastStop = currentStops[currentStops.length - 1];
+  const prevBeforeMax = lastStop ? lastStop.sample : res0;
+  if (
+    !foundByTarget.has(sliderSafeCap) &&
+    hasSignificantAcaDelta(prevBeforeMax, resMax, {
+      minAptcOrPrem: currentStops.length === 0 ? 8 : 10,
+      allowCostSharingOnly: true,
+    })
+  ) {
+    foundByTarget.set(sliderSafeCap, {
+      id: 'slider_max',
+      thresholdLabel: maxLabel.thresholdLabel,
+      shortLabel: maxLabel.shortLabel,
+      benefitLabel: maxLabel.benefitLabel,
+      sample: resMax,
+    });
+  }
+
+  // 5. Tiered Subdivision: Ensures sliders that stay inside a wide FPL band (Employer Profit Share, Trad-IRA, SEP)
+  //    or have wide gaps >= $2,500 generate clean multi-step tiers (~3-4 rungs) when ACA premiums keep dropping!
+  const sortedStops = Array.from(foundByTarget.values()).sort((a, b) => a.sample.val - b.sample.val);
+  if (sortedStops.length > 0 && sortedStops.length < 3 && sliderSafeCap >= 1500) {
+    const boundaries: MilestoneSample[] = [res0, ...sortedStops.map((s) => s.sample)];
+    const roundUnit = sliderSafeCap >= 3000 ? 500 : 100;
+    let tierCounter = 1;
+
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const low = boundaries[i];
+      const high = boundaries[i + 1];
+      const span = high.val - low.val;
+      const spanPremDrop = low.silverMonthlyPremium - high.silverMonthlyPremium;
+
+      if (span < roundUnit * 2 || spanPremDrop < 16) continue;
+
+      // Subdivide large spans into 2 intermediate steps (34%, 67%) or 1 midpoint (50%)
+      const desiredSubdivisions =
+        (sortedStops.length === 1 || (span >= roundUnit * 5 && spanPremDrop >= 30)) &&
+        span >= roundUnit * 4 &&
+        spanPremDrop >= 24
+          ? [0.34, 0.67]
+          : [0.5];
+
+      let prevInSpan = low;
+      for (const frac of desiredSubdivisions) {
+        if (foundByTarget.size >= 4) break;
+        const rawTarget = Math.round((low.val + span * frac) / roundUnit) * roundUnit;
+        if (rawTarget - prevInSpan.val < roundUnit || high.val - rawTarget < roundUnit) continue;
+
+        const midSample = samples.reduce((best, curr) =>
+          Math.abs(curr.val - rawTarget) < Math.abs(best.val - rawTarget) ? curr : best
+        );
+        if (midSample.val <= prevInSpan.val || midSample.val >= high.val) continue;
+        if (foundByTarget.has(midSample.val)) continue;
+
+        const gainFromPrev = prevInSpan.silverMonthlyPremium - midSample.silverMonthlyPremium;
+        const gainToHigh = midSample.silverMonthlyPremium - high.silverMonthlyPremium;
+
+        if (gainFromPrev >= 8 && gainToHigh >= 8) {
+          foundByTarget.set(midSample.val, {
+            id: 'tiered_step',
+            thresholdLabel: `Tier ${tierCounter} ACA Step (${midSample.fplPct}% FPL)`,
+            shortLabel: `Tier ${tierCounter} (${midSample.fplPct}% FPL)`,
+            benefitLabel: `Lowers Silver Prem. to $${midSample.silverMonthlyPremium}/mo`,
+            sample: midSample,
+          });
+          tierCounter += 1;
+          prevInSpan = midSample;
+        }
+      }
+    }
+  }
+
+  // Sort final stops and build enriched UI items with direct Silver monthly premium effects
+  const orderedStops = Array.from(foundByTarget.values()).sort((a, b) => a.sample.val - b.sample.val);
+  const milestones: SliderMilestoneItem[] = orderedStops.map((m) => {
+    const deltaFromCurrent = m.sample.val - currentSliderValue;
+    const isUnlocked = deltaFromCurrent <= 0;
+    const monthlyAptcGain = isUnlocked
+      ? Math.max(0, m.sample.monthlySubsidy - res0.monthlySubsidy)
+      : Math.max(0, m.sample.monthlySubsidy - currentSample.monthlySubsidy);
+
+    const monthlyPremiumDropFromZero = Math.max(
+      0,
+      res0.silverMonthlyPremium - m.sample.silverMonthlyPremium
+    );
+    const monthlyPremiumDropFromCurrent = Math.max(
+      0,
+      currentSample.silverMonthlyPremium - m.sample.silverMonthlyPremium
+    );
+
+    const premDeltaLabel = isUnlocked
+      ? `Silver $${m.sample.silverMonthlyPremium.toLocaleString()}/mo (-$${monthlyPremiumDropFromZero.toLocaleString()}/mo vs $0)`
+      : monthlyPremiumDropFromCurrent > 0
+      ? `Silver $${currentSample.silverMonthlyPremium.toLocaleString()} → $${m.sample.silverMonthlyPremium.toLocaleString()}/mo (-$${monthlyPremiumDropFromCurrent.toLocaleString()}/mo)`
+      : monthlyAptcGain > 0
+      ? `+$${monthlyAptcGain.toLocaleString()}/mo APTC`
+      : '';
+
+    return {
+      id: m.id,
+      thresholdLabel: m.thresholdLabel,
+      shortLabel: m.shortLabel,
+      benefitLabel: premDeltaLabel ? `${m.benefitLabel} · ${premDeltaLabel}` : m.benefitLabel,
+      targetSliderValue: m.sample.val,
+      deltaFromCurrent,
+      monthlyAptcGain,
+      resultingFplPct: m.sample.fplPct,
+      resultingSilverMonthlyPremium: m.sample.silverMonthlyPremium,
+      monthlyPremiumDropFromZero,
+      monthlyPremiumDropFromCurrent,
+      resultingDeductible: m.sample.silverDeductible,
+      isCloseProximity: deltaFromCurrent > 0 && deltaFromCurrent <= closeProximityLimit,
+      isUnlocked,
+    };
+  });
+
+  const nextJump = milestones.find((m) => m.deltaFromCurrent > 0) || null;
+  return { nextJump, milestones };
+}
+
+export function computeSelfEmployedSliderMilestones(params: {
+  sliderField: 'soloEmployee' | 'soloEmployer' | 'sepContribution' | 'clientIra' | 'spouseIra';
+  currentSliderValue: number;
+  sliderSafeCap: number;
+  strategyParams: Parameters<typeof calculateSelfEmployedAcaStrategy>[0];
+}): SliderMilestonePlan {
+  const { sliderField, currentSliderValue, sliderSafeCap, strategyParams } = params;
+  const taxYear = strategyParams.taxYear || '2027';
+  const fpl100 = get100PercentFPL(strategyParams.householdSize, taxYear);
+  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
+
+  if (sliderSafeCap <= 0 || strategyParams.grossAGI <= acaSafeFloor138) {
+    return { nextJump: null, milestones: [] };
+  }
+
+  const toSample = (val: number): MilestoneSample => {
+    const cleanVal = Math.max(0, Math.min(sliderSafeCap, val));
+    const override = { ...strategyParams };
+    if (sliderField === 'soloEmployee') override.customSoloEmployee = cleanVal;
+    else if (sliderField === 'soloEmployer') override.customSoloEmployer = cleanVal;
+    else if (sliderField === 'sepContribution') override.customSepContribution = cleanVal;
+    else if (sliderField === 'clientIra') {
+      override.stackClientTradIra = cleanVal > 0;
+      override.customClientIraAmount = cleanVal;
+    } else if (sliderField === 'spouseIra') {
+      override.stackSpousalIra = cleanVal > 0;
+      override.customSpouseIraAmount = cleanVal;
+    }
+    const res = calculateSelfEmployedAcaStrategy(override);
+    return {
+      val: cleanVal,
+      agi: res.optimizedAgi,
+      fplPct: res.optimizedFplPct,
+      monthlySubsidy: res.optimizedAca.monthlySubsidy,
+      silverMonthlyPremium: res.optimizedSilverTier.monthlyPremium,
+      silverDeductible: res.optimizedSilverTier.deductible,
+      silverOopMax: res.optimizedSilverTier.applicableOopMax,
+      magiAfterPrimaryPlan: res.magiAfterPrimaryPlan,
+    };
+  };
+
+  // Build ordered $100 simulation grid from 0 -> sliderSafeCap
+  const sampleValues: number[] = [];
+  for (let v = 0; v <= sliderSafeCap; v += 100) {
+    sampleValues.push(v);
+  }
+  if (sampleValues[sampleValues.length - 1] !== sliderSafeCap) {
+    sampleValues.push(sliderSafeCap);
+  }
+
+  const samples = sampleValues.map((v) => toSample(v));
+  const currentSample = toSample(currentSliderValue);
+  const baseLimits = calculateSelfEmployedAcaStrategy(strategyParams).limits;
+
+  const isPrimarySlider =
+    sliderField === 'soloEmployee' ||
+    sliderField === 'soloEmployer' ||
+    sliderField === 'sepContribution';
+
+  return buildTieredMilestonePlan({
+    samples,
+    currentSample,
+    currentSliderValue,
+    sliderSafeCap,
+    fpl100,
+    safeFloor138: acaSafeFloor138,
+    checkIraUnlock:
+      isPrimarySlider &&
+      Boolean(strategyParams.stackClientTradIra) &&
+      (strategyParams.customClientIraAmount || 0) > 0,
+    clientPhaseOutStart: baseLimits.clientPhaseOutStart,
+    closeProximityLimit: 5000,
+    maxLabel: {
+      thresholdLabel: 'Max Safe ACA Cap',
+      shortLabel: 'Safe Max',
+      benefitLabel: 'Max Monthly ACA Reduction Within Cap',
+    },
+  });
+}
+
+export function computeAtlasBridgeMaxPreset(params: {
+  grossAGI: number;
+  clientAge: number;
+  spouseAge?: number;
+  filingStatus: FilingStatus;
+  householdSize: number;
+  isClientCovered: boolean;
+  isSpouseCovered: boolean;
+  taxYear?: TaxYear;
+}): {
+  clientIra: number;
+  spouseIra: number;
+  projectedAgi: number;
+} {
+  const {
+    grossAGI,
+    clientAge,
+    spouseAge = clientAge,
+    filingStatus,
+    householdSize,
+    isClientCovered,
+    isSpouseCovered,
+    taxYear = '2027',
+  } = params;
+
+  const isMarried = filingStatus === 'married';
+  const fpl100 = get100PercentFPL(householdSize, taxYear);
+  const safeFloor138 = Math.ceil(fpl100 * 1.38);
+  const maxSafeBudget = Math.max(0, grossAGI - safeFloor138);
+
+  const clientCap = getIRSLimitForAge(clientAge);
+  const clientInfo = getTraditionalIRADeductionLimit(
+    grossAGI,
+    clientAge,
+    isClientCovered,
+    filingStatus,
+    isSpouseCovered,
+    taxYear
+  );
+  const clientIra = Math.min(clientCap, clientInfo.maxDeductible, maxSafeBudget);
+
+  let spouseIra = 0;
+  if (isMarried) {
+    const remainingBudget = Math.max(0, maxSafeBudget - clientIra);
+    const spouseCap = getIRSLimitForAge(spouseAge);
+    const spouseInfo = getTraditionalIRADeductionLimit(
+      grossAGI,
+      spouseAge,
+      isSpouseCovered,
+      filingStatus,
+      isClientCovered,
+      taxYear
+    );
+    spouseIra = Math.min(spouseCap, spouseInfo.maxDeductible, remainingBudget);
+  }
+
+  const projectedAgi =
+    grossAGI <= safeFloor138
+      ? grossAGI
+      : Math.max(safeFloor138, grossAGI - (clientIra + spouseIra));
+
+  return { clientIra, spouseIra, projectedAgi };
+}
+
+export function computeAtlasBridgeIraMilestones(params: {
+  sliderRole: 'client' | 'spouse';
+  grossAGI: number;
+  clientAge: number;
+  spouseAge: number;
+  filingStatus: FilingStatus;
+  householdSize: number;
+  currentClientIra: number;
+  currentSpouseIra: number;
+  effectiveMaxClientIRA: number;
+  effectiveMaxSpouseIRA: number;
+  clientMaxDeductible: number;
+  spouseMaxDeductible: number;
+  taxYear?: TaxYear;
+  carrierId?: HealthCarrierId;
+}): SliderMilestonePlan {
+  const {
+    sliderRole,
+    grossAGI,
+    clientAge,
+    householdSize,
+    currentClientIra,
+    currentSpouseIra,
+    effectiveMaxClientIRA,
+    effectiveMaxSpouseIRA,
+    clientMaxDeductible,
+    spouseMaxDeductible,
+    taxYear = '2027',
+    carrierId = 'oscar',
+  } = params;
 
   const fpl100 = get100PercentFPL(householdSize, taxYear);
-  const acaSafeFloor138 = Math.ceil(fpl100 * 1.38);
-  const currentAca = calculateAcaDetails(currentOptimizedAgi, householdSize, clientAge, taxYear);
+  const safeFloor138 = Math.ceil(fpl100 * 1.38);
+  const maxSafeBudget = Math.max(0, grossAGI - safeFloor138);
 
-  type Candidate = {
-    thresholdLabel: string;
-    benefitLabel: string;
-    delta: number;
-    targetAgi: number;
+  const sliderSafeCap =
+    sliderRole === 'client' ? effectiveMaxClientIRA : effectiveMaxSpouseIRA;
+  const maxDedForThisSlider =
+    sliderRole === 'client' ? clientMaxDeductible : spouseMaxDeductible;
+  const currentSliderValue =
+    sliderRole === 'client' ? currentClientIra : currentSpouseIra;
+
+  // Non-deductible contributions do not move ACA MAGI
+  const usableCap = Math.min(sliderSafeCap, maxDedForThisSlider);
+  if (usableCap <= 0 || grossAGI <= safeFloor138) {
+    return { nextJump: null, milestones: [] };
+  }
+
+  const toSample = (val: number): MilestoneSample => {
+    const cleanVal = Math.max(0, Math.min(usableCap, val));
+    let clDed = 0;
+    let spDed = 0;
+    if (sliderRole === 'client') {
+      clDed = Math.min(cleanVal, clientMaxDeductible);
+      const spMaxAfterCl = Math.min(effectiveMaxSpouseIRA, Math.max(0, maxSafeBudget - cleanVal));
+      spDed = Math.min(currentSpouseIra, spMaxAfterCl, spouseMaxDeductible);
+    } else {
+      clDed = Math.min(currentClientIra, effectiveMaxClientIRA, clientMaxDeductible);
+      spDed = Math.min(cleanVal, spouseMaxDeductible);
+    }
+    const agi =
+      grossAGI <= safeFloor138
+        ? grossAGI
+        : Math.max(safeFloor138, grossAGI - (clDed + spDed));
+    const proj = calculateAcaTierProjection({
+      agi,
+      householdSize,
+      clientAge,
+      carrierId,
+      scenario: 'moderate',
+      taxYear,
+    });
+    return {
+      val: cleanVal,
+      agi,
+      fplPct: proj.baseAca.fplPct,
+      monthlySubsidy: proj.baseAca.monthlySubsidy,
+      silverMonthlyPremium: proj.tiers.silver.monthlyPremium,
+      silverDeductible: proj.tiers.silver.deductible,
+      silverOopMax: proj.tiers.silver.applicableOopMax,
+      magiAfterPrimaryPlan: agi,
+    };
   };
-  const candidates: Candidate[] = [];
 
-  // 1. ACA FPL Thresholds (in descending AGI order, find exact delta to cross cleanly)
-  const fplBreakpoints: Array<{ mult: number; label: string; badge: string }> = [
-    { mult: 4.0, label: '400% FPL Cliff', badge: 'Unlocks ACA APTC Subsidies' },
-    { mult: 2.5, label: '250% FPL Tier', badge: 'Unlocks 73% Silver CSR + Higher APTC' },
-    { mult: 2.0, label: '200% FPL Tier', badge: 'Unlocks 87% Silver CSR ($800 Ded.)' },
-    { mult: 1.495, label: '150% FPL Tier', badge: 'Unlocks 94% Silver CSR ($0 Ded.)' },
-  ];
-
-  for (const bp of fplBreakpoints) {
-    const cutoffAgi = Math.floor(fpl100 * bp.mult);
-    if (cutoffAgi >= acaSafeFloor138 && currentOptimizedAgi > cutoffAgi) {
-      const delta = currentOptimizedAgi - cutoffAgi;
-      if (delta > 0 && delta <= headroom) {
-        candidates.push({
-          thresholdLabel: bp.label,
-          benefitLabel: bp.badge,
-          delta,
-          targetAgi: cutoffAgi,
-        });
-      }
-    }
+  // Sample in $50 steps across usableCap (ensuring exact cap endpoint)
+  const sampleValues: number[] = [];
+  for (let v = 0; v <= usableCap; v += 50) {
+    sampleValues.push(v);
+  }
+  if (sampleValues[sampleValues.length - 1] !== usableCap) {
+    sampleValues.push(usableCap);
   }
 
-  // 2. IRS Traditional IRA Active-Participant Phase-Out Unlock (for Solo 401k / SEP sliders)
-  if (
-    sliderType === 'primary_plan' &&
-    isClientIraActive &&
-    currentSliderValue > 0 &&
-    params.magiAfterPrimaryPlan >= clientPhaseOutStart
-  ) {
-    const unlockAgi = clientPhaseOutStart - 100;
-    const deltaToUnlock = params.magiAfterPrimaryPlan - unlockAgi;
-    if (deltaToUnlock > 0 && deltaToUnlock <= headroom) {
-      candidates.push({
-        thresholdLabel: 'IRS IRA Unlock',
-        benefitLabel: 'Unlocks Full Deductible Trad IRA',
-        delta: deltaToUnlock,
-        targetAgi: Math.max(acaSafeFloor138, currentOptimizedAgi - deltaToUnlock),
-      });
-    }
-  }
+  const samples = sampleValues.map((v) => toSample(v));
+  const currentSample = toSample(currentSliderValue);
 
-  // 3. Max 138% FPL Safe Floor option if still above floor and no closer breakpoint exists (or within close range)
-  if (currentOptimizedAgi > acaSafeFloor138) {
-    const deltaTo138 = Math.min(headroom, currentOptimizedAgi - acaSafeFloor138);
-    if (deltaTo138 > 0) {
-      const resultingAgi = Math.max(acaSafeFloor138, currentOptimizedAgi - deltaTo138);
-      const nextAca = calculateAcaDetails(resultingAgi, householdSize, clientAge, taxYear);
-      const gain = Math.max(0, nextAca.monthlySubsidy - currentAca.monthlySubsidy);
-      if (candidates.length === 0 && (gain > 0 || resultingAgi === acaSafeFloor138)) {
-        candidates.push({
-          thresholdLabel: resultingAgi === acaSafeFloor138 ? '138% FPL Max ACA' : 'Max Slider ACA',
-          benefitLabel: gain > 0 ? `+$${gain.toLocaleString()}/mo APTC Boost` : 'Lowest Safe ACA MAGI',
-          delta: deltaTo138,
-          targetAgi: resultingAgi,
-        });
-      }
-    }
-  }
-
-  if (candidates.length === 0) return null;
-
-  // Choose nearest actionable breakpoint
-  candidates.sort((a, b) => a.delta - b.delta);
-  const best = candidates[0];
-  const targetSliderValue = Math.min(sliderSafeCap, currentSliderValue + best.delta);
-  const actualDelta = Math.max(0, targetSliderValue - currentSliderValue);
-  if (actualDelta <= 0) return null;
-
-  const afterAca = calculateAcaDetails(best.targetAgi, householdSize, clientAge, taxYear);
-  const monthlyAptcGain = Math.max(0, afterAca.monthlySubsidy - currentAca.monthlySubsidy);
-
-  return {
-    thresholdLabel: best.thresholdLabel,
-    benefitLabel:
-      monthlyAptcGain > 0
-        ? `${best.benefitLabel} (+$${monthlyAptcGain.toLocaleString()}/mo APTC)`
-        : best.benefitLabel,
-    targetSliderValue,
-    deltaNeeded: actualDelta,
-    monthlyAptcGain,
-    isCloseProximity: actualDelta <= 5000,
-  };
+  return buildTieredMilestonePlan({
+    samples,
+    currentSample,
+    currentSliderValue,
+    sliderSafeCap: usableCap,
+    fpl100,
+    safeFloor138,
+    closeProximityLimit: 3500,
+    maxLabel: {
+      thresholdLabel: 'Max Deductible Cap',
+      shortLabel: 'Max Cap',
+      benefitLabel: 'Max Monthly ACA Reduction Within IRS Limit',
+    },
+  });
 }
 
 export function getRegionLabelForZip(zipCode?: string): string {

@@ -604,14 +604,14 @@ export const StepTwoQuestionnaire: React.FC<StepTwoQuestionnaireProps> = ({
                     const hasSpouse = val === 'spouse_only' || val === 'both';
                     onChangeClientData({
                       active401k: val as ClientData['active401k'],
-                      dormantRetirement: hasClient ? (clientData.dormantRetirement || 6000) : 0,
-                      spouseDormantRetirement: hasSpouse ? (clientData.spouseDormantRetirement || 6000) : 0,
+                      dormantRetirement: hasClient ? (clientData.dormantRetirement || 0) : 0,
+                      spouseDormantRetirement: hasSpouse ? (clientData.spouseDormantRetirement || 0) : 0,
                     });
                   } else {
                     const isYes = val === 'yes';
                     onChangeClientData({
                       active401k: isYes,
-                      dormantRetirement: isYes ? (clientData.dormantRetirement || 6000) : 0,
+                      dormantRetirement: isYes ? (clientData.dormantRetirement || 0) : 0,
                       spouseDormantRetirement: 0,
                     });
                   }
@@ -655,8 +655,8 @@ export const StepTwoQuestionnaire: React.FC<StepTwoQuestionnaireProps> = ({
                   if (isMarried) {
                     const hasClient = val === 'client_only' || val === 'both';
                     const hasSpouse = val === 'spouse_only' || val === 'both';
-                    const nextClientCash = hasClient ? (clientData.existingAnnuityCash || Math.min(6000, currentIRSLimit)) : 0;
-                    const nextSpouseCash = hasSpouse ? (clientData.spouseExistingAnnuityCash || Math.min(6000, spouseIRSLimit)) : 0;
+                    const nextClientCash = hasClient ? (clientData.existingAnnuityCash || 0) : 0;
+                    const nextSpouseCash = hasSpouse ? (clientData.spouseExistingAnnuityCash || 0) : 0;
                     onChangeClientData({
                       hasTraditionalIraAnnuity: hasClient || hasSpouse,
                       annuityType: val as ClientData['annuityType'],
@@ -666,7 +666,7 @@ export const StepTwoQuestionnaire: React.FC<StepTwoQuestionnaireProps> = ({
                     });
                   } else {
                     const isYes = val === 'yes';
-                    const nextClientCash = isYes ? (clientData.existingAnnuityCash || Math.min(6000, currentIRSLimit)) : 0;
+                    const nextClientCash = isYes ? (clientData.existingAnnuityCash || 0) : 0;
                     onChangeClientData({
                       hasTraditionalIraAnnuity: isYes,
                       annuityType: isYes ? 'yes' : 'no',

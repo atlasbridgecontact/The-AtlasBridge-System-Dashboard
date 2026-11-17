@@ -25,7 +25,6 @@ interface AreaAccountPreset {
   label: string;
   subtitle: string;
   transferMode: RolloverTransferMode;
-  capital: number;
   currentFeeRate: number;
   legacySurrenderPct: number;
   costBasisPct: number;
@@ -35,10 +34,9 @@ interface AreaAccountPreset {
 const AREA_ACCOUNT_PRESETS: AreaAccountPreset[] = [
   {
     id: 'dormant_401k',
-    label: '$75k Dormant 401(k)',
+    label: 'Dormant 401(k)',
     subtitle: 'Former employer plan · IRC § 402(c)',
     transferMode: 'qualified_rollover',
-    capital: 75000,
     currentFeeRate: 1.65,
     legacySurrenderPct: 0,
     costBasisPct: 0,
@@ -46,10 +44,9 @@ const AREA_ACCOUNT_PRESETS: AreaAccountPreset[] = [
   },
   {
     id: 'legacy_403b',
-    label: '$185k Managed 403(b) / IRA',
+    label: 'Managed 403(b) / IRA',
     subtitle: 'High advisor + mutual fund drag',
     transferMode: 'qualified_rollover',
-    capital: 185000,
     currentFeeRate: 1.95,
     legacySurrenderPct: 0,
     costBasisPct: 0,
@@ -57,10 +54,9 @@ const AREA_ACCOUNT_PRESETS: AreaAccountPreset[] = [
   },
   {
     id: 'annuity_1035',
-    label: '$350k Outdated Annuity',
+    label: 'Outdated Annuity',
     subtitle: 'Non-Qual M&E fee trap · IRC § 1035',
     transferMode: 'exchange_1035',
-    capital: 350000,
     currentFeeRate: 2.25,
     legacySurrenderPct: 4,
     costBasisPct: 60,
@@ -68,10 +64,9 @@ const AREA_ACCOUNT_PRESETS: AreaAccountPreset[] = [
   },
   {
     id: 'exec_650k',
-    label: '$650k Executive Rollover',
+    label: 'Executive Rollover',
     subtitle: 'Consolidated retirement principal lock',
     transferMode: 'qualified_rollover',
-    capital: 650000,
     currentFeeRate: 1.75,
     legacySurrenderPct: 0,
     costBasisPct: 0,
@@ -80,9 +75,9 @@ const AREA_ACCOUNT_PRESETS: AreaAccountPreset[] = [
 ];
 
 const BONUS_TIERS = [
-  { rate: 0, label: '0% Liquid', desc: 'Short surrender / liquid MYGA' },
+  { rate: 0, label: '0% Liquid', desc: 'Short-term liquid MYGA' },
   { rate: 5, label: '+5% Bonus', desc: 'Balanced 7-yr FIA credit' },
-  { rate: 8, label: '+8% Bonus', desc: 'Max upfront institutional credit' },
+  { rate: 8, label: '+8% Bonus', desc: 'Max institutional credit' },
 ] as const;
 
 export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
@@ -140,12 +135,10 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
     SoundFX.playClick();
     setActivePresetId(preset.id);
     setTransferMode(preset.transferMode);
-    setRolloverCapital(preset.capital);
     setCurrentFeeRate(preset.currentFeeRate);
     setLegacySurrenderPct(preset.legacySurrenderPct);
     setCostBasisPct(preset.costBasisPct);
     setBonusRatePct(preset.bonusRatePct);
-    onChangeClientData({ dormantRetirement: preset.capital });
   };
 
   // Sync live interactive state into ActiveStrategySnapshot (deduplicated)
@@ -375,15 +368,15 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
           </div>
         </div>
 
-        {/* Common Local Area Account Presets */}
+        {/* Account Structure & Fee Profile Presets */}
         <div className="bg-navy-950/90 p-4 rounded-2xl border border-navy-700/80 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <span className="text-xs font-extrabold text-white flex items-center gap-2">
               <i className="fa-solid fa-location-dot text-cyan-400"></i>
-              Common Local Rollover &amp; 1035 Account Presets ({regionLabel})
+              <span>Account Type &amp; Fee Profiles ({regionLabel})</span>
             </span>
             <span className="text-[11px] text-slate-400">
-              Select a typical regional balance or adjust sliders manually
+              Sets tax rules &amp; fee drag — adjust your balance with the slider below
             </span>
           </div>
 
@@ -395,16 +388,16 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                   key={preset.id}
                   type="button"
                   onClick={() => applyPreset(preset)}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer space-y-0.5 ${
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer space-y-1 ${
                     isSelected
                       ? 'bg-navy-900 border-cyan-400 shadow-lg shadow-cyan-500/15'
                       : 'bg-navy-900/60 border-navy-800 hover:border-cyan-500/40'
                   }`}
                 >
-                  <span className={`text-xs font-extrabold block ${isSelected ? 'text-white' : 'text-slate-200'}`}>
+                  <span className={`text-xs sm:text-[13px] font-extrabold block whitespace-nowrap truncate ${isSelected ? 'text-white' : 'text-slate-200'}`}>
                     {preset.label}
                   </span>
-                  <span className="text-[10.5px] text-slate-400 block">{preset.subtitle}</span>
+                  <span className="text-[11px] text-slate-400 block leading-snug">{preset.subtitle}</span>
                 </button>
               );
             })}
@@ -416,14 +409,14 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
           {/* Left Panel: Capital, Fee Drag & Expected Gross Growth */}
           <div className="bg-navy-950/85 p-5 rounded-2xl border border-navy-700/80 space-y-5 shadow-xl">
             <div className="space-y-2">
-              <div className="flex justify-between items-center text-xs sm:text-sm">
-                <span className="text-slate-300 font-bold">
+              <div className="flex flex-wrap sm:flex-nowrap justify-between items-center gap-3 text-xs sm:text-[13px]">
+                <span className="text-slate-300 font-bold leading-snug">
                   {transferMode === 'qualified_rollover'
-                    ? 'Dormant Plan Balance to Roll Over:'
-                    : 'Current Annuity / Policy Transfer Capital:'}{' '}
-                  {isMarried && <span className="text-gold-400 font-bold">(Household)</span>}
+                    ? 'Rollover Plan Balance:'
+                    : 'Annuity Transfer Balance:'}{' '}
+                  {isMarried && <span className="text-gold-400 font-bold whitespace-nowrap">(Household)</span>}
                 </span>
-                <div className="flex items-center gap-1 bg-navy-900 px-2.5 py-1 rounded-lg border border-cyan-500/40">
+                <div className="flex items-center gap-1 bg-navy-900 px-2.5 py-1 rounded-lg border border-cyan-500/40 shrink-0">
                   <span className="text-cyan-400 font-bold">$</span>
                   <input
                     type="number"
@@ -456,20 +449,20 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                 }}
                 className="w-full h-2 bg-navy-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
               />
-              <div className="flex justify-between text-[10px] text-slate-400 tabular-nums">
-                <span>$10k Min</span>
-                <span>$500k</span>
-                <span>$1.0M+ Principal</span>
+              <div className="flex justify-between text-[11px] text-slate-400 tabular-nums">
+                <span className="whitespace-nowrap">$10k Min</span>
+                <span className="whitespace-nowrap">$500k</span>
+                <span className="whitespace-nowrap">$1.0M+ Principal</span>
               </div>
             </div>
 
             {/* Fee Drag Slider */}
-            <div className="space-y-2 pt-1 border-t border-navy-800">
-              <div className="flex justify-between items-center text-xs">
+            <div className="space-y-2 pt-2 border-t border-navy-800">
+              <div className="flex justify-between items-center gap-3 text-xs sm:text-[13px]">
                 <span className="text-slate-300 font-semibold">
-                  Current Custodian / Fund / M&amp;E Fee Drag:
+                  Legacy Custodian / M&amp;E Fee Drag:
                 </span>
-                <span className="text-amber-400 font-extrabold tabular-nums">
+                <span className="text-amber-400 font-extrabold tabular-nums whitespace-nowrap shrink-0">
                   {currentFeeRate.toFixed(2)}% / yr
                 </span>
               </div>
@@ -490,12 +483,12 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
             </div>
 
             {/* Expected Gross Index / Portfolio Yield */}
-            <div className="space-y-2 pt-1 border-t border-navy-800">
-              <div className="flex justify-between items-center text-xs">
+            <div className="space-y-2 pt-2 border-t border-navy-800">
+              <div className="flex justify-between items-center gap-3 text-xs sm:text-[13px]">
                 <span className="text-slate-300 font-semibold">
                   Modeled Gross Annual Growth Rate:
                 </span>
-                <span className="text-emerald-400 font-extrabold tabular-nums">
+                <span className="text-emerald-400 font-extrabold tabular-nums whitespace-nowrap shrink-0">
                   {expectedGrossYield.toFixed(1)}% / yr
                 </span>
               </div>
@@ -520,11 +513,11 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
             <div className="space-y-4">
               {/* Age & Tax Bracket */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="bg-navy-900 p-3 rounded-xl border border-navy-800 space-y-1.5">
-                  <div className="flex justify-between items-center text-[10px]">
-                    <span className="text-slate-400 font-bold uppercase">Client Age</span>
-                    <strong className="text-white tabular-nums">
-                      {clientData.clientAge} yrs {clientData.clientAge < 59.5 ? '(10% Penalty)' : ''}
+                <div className="bg-navy-900 p-3 rounded-xl border border-navy-800 space-y-2">
+                  <div className="flex justify-between items-center gap-2 text-[11px]">
+                    <span className="text-slate-400 font-bold uppercase whitespace-nowrap">Client Age</span>
+                    <strong className="text-white tabular-nums whitespace-nowrap shrink-0">
+                      {clientData.clientAge} yrs{clientData.clientAge < 59.5 ? ' · 10% Pen.' : ' · Open'}
                     </strong>
                   </div>
                   <input
@@ -543,7 +536,7 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                 </div>
 
                 <div className="bg-navy-900 p-3 rounded-xl border border-navy-800 space-y-1.5">
-                  <label htmlFor="rollover-tax-bracket" className="text-[10px] text-slate-400 font-bold uppercase block">
+                  <label htmlFor="rollover-tax-bracket" className="text-[11px] text-slate-400 font-bold uppercase block whitespace-nowrap">
                     Federal Ordinary Tax Bracket
                   </label>
                   <select
@@ -564,9 +557,9 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
               {transferMode === 'exchange_1035' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-navy-900 p-3.5 rounded-xl border border-cyan-500/30">
                   <div className="space-y-1.5">
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-300 font-semibold">Cost Basis %:</span>
-                      <strong className="text-cyan-300 tabular-nums">{costBasisPct}%</strong>
+                    <div className="flex justify-between items-center gap-2 text-xs">
+                      <span className="text-slate-300 font-semibold whitespace-nowrap">Cost Basis %:</span>
+                      <strong className="text-cyan-300 tabular-nums whitespace-nowrap">{costBasisPct}%</strong>
                     </div>
                     <input
                       type="range"
@@ -583,9 +576,9 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-300 font-semibold">Legacy Surrender Fee:</span>
-                      <strong className="text-rose-300 tabular-nums">{legacySurrenderPct}%</strong>
+                    <div className="flex justify-between items-center gap-2 text-xs">
+                      <span className="text-slate-300 font-semibold whitespace-nowrap">Legacy Surrender Fee:</span>
+                      <strong className="text-rose-300 tabular-nums whitespace-nowrap">{legacySurrenderPct}%</strong>
                     </div>
                     <input
                       type="range"
@@ -602,20 +595,20 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="bg-navy-900 p-3 rounded-xl border border-cyan-500/30 text-[11px] text-slate-300 leading-snug">
+                <div className="bg-navy-900 p-3 rounded-xl border border-cyan-500/30 text-xs text-slate-300 leading-relaxed">
                   <strong className="text-cyan-300 block mb-0.5">
                     IRC § 402(c) Direct Trustee-to-Trustee Shield
                   </strong>
-                  Avoids the mandatory <strong className="text-rose-300 tabular-nums">20% IRS withholding (${analysis.mandatoryWithholdingAvoided.toLocaleString()})</strong> and ordinary tax trigger assessed on indirect 60-day check distributions.
+                  Avoids the mandatory <strong className="text-rose-300 tabular-nums whitespace-nowrap">20% IRS withholding (${analysis.mandatoryWithholdingAvoided.toLocaleString()})</strong> and ordinary tax trigger assessed on indirect 60-day check distributions.
                 </div>
               )}
 
               {/* Upfront Bonus Tier Selector */}
               <div className="space-y-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
+                <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider block">
                   Receiving Carrier Upfront Bonus Structure
                 </span>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {BONUS_TIERS.map((tier) => {
                     const isActive = bonusRatePct === tier.rate;
                     return (
@@ -627,14 +620,14 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                           setActivePresetId('');
                           setBonusRatePct(tier.rate);
                         }}
-                        className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                        className={`p-2.5 rounded-lg border text-left transition-colors cursor-pointer ${
                           isActive
                             ? 'bg-cyan-600/20 border-cyan-400 text-white'
                             : 'bg-navy-900 border-navy-800 text-slate-400 hover:text-white'
                         }`}
                       >
                         <span className="text-xs font-extrabold block whitespace-nowrap">{tier.label}</span>
-                        <span className="text-[9.5px] text-slate-400 block leading-tight mt-0.5">{tier.desc}</span>
+                        <span className="text-[10.5px] text-slate-400 block leading-snug mt-0.5">{tier.desc}</span>
                       </button>
                     );
                   })}
@@ -648,90 +641,89 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Downsides Ledger */}
           <div className="bg-navy-950 p-5 rounded-2xl border border-rose-500/40 space-y-4">
-            <div className="flex items-center justify-between border-b border-navy-800 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-navy-800 pb-3">
               <div>
-                <span className="text-[10px] text-rose-400 font-extrabold uppercase tracking-wider block">
-                  Downsides of Liquidating or Doing Nothing
+                <span className="text-[10.5px] text-rose-400 font-extrabold uppercase tracking-wider block whitespace-nowrap">
+                  Liquidation &amp; Inaction Downsides
                 </span>
-                <h4 className="text-base font-extrabold text-white">Cash-Out Erosion &amp; Legacy Fee Drag</h4>
+                <h4 className="text-sm sm:text-base font-extrabold text-white">Cash-Out Erosion &amp; Fee Drag</h4>
               </div>
-              <span className="text-lg font-black text-rose-300 tabular-nums">
+              <span className="text-base sm:text-lg font-black text-rose-300 tabular-nums whitespace-nowrap shrink-0">
                 -${analysis.totalCashOutErosion.toLocaleString()} Cash-Out Loss
               </span>
             </div>
 
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between text-slate-300">
-                <span>Ordinary Federal Tax if Liquidated ({taxBracket}%):</span>
-                <strong className="text-rose-300 tabular-nums">-${analysis.ordinaryTaxDollar.toLocaleString()}</strong>
+            <div className="space-y-2.5 text-xs sm:text-[13px]">
+              <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                <span>Ordinary Federal Tax ({taxBracket}% Bracket):</span>
+                <strong className="text-rose-300 tabular-nums whitespace-nowrap shrink-0">-${analysis.ordinaryTaxDollar.toLocaleString()}</strong>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>IRS Early Withdrawal Penalty (&lt;Age 59.5 · {analysis.earlyPenaltyPct}%):</span>
-                <strong className="text-rose-300 tabular-nums">-${analysis.earlyPenaltyDollar.toLocaleString()}</strong>
+              <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                <span>IRS Early Penalty (&lt;Age 59.5 · {analysis.earlyPenaltyPct}%):</span>
+                <strong className="text-rose-300 tabular-nums whitespace-nowrap shrink-0">-${analysis.earlyPenaltyDollar.toLocaleString()}</strong>
               </div>
               {transferMode === 'exchange_1035' && (
-                <div className="flex justify-between text-slate-300">
-                  <span>Legacy Surrender Exit Penalty ({legacySurrenderPct}%):</span>
-                  <strong className="text-amber-300 tabular-nums">-${analysis.legacySurrenderFeeDollar.toLocaleString()}</strong>
+                <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                  <span>Legacy Surrender Exit Fee ({legacySurrenderPct}%):</span>
+                  <strong className="text-amber-300 tabular-nums whitespace-nowrap shrink-0">-${analysis.legacySurrenderFeeDollar.toLocaleString()}</strong>
                 </div>
               )}
-              <div className="flex justify-between pt-2 border-t border-navy-800 text-xs font-extrabold">
-                <span className="text-slate-200">Net Take-Home Cash if Liquidated Today:</span>
-                <strong className="text-rose-300 tabular-nums">${analysis.netCashOutToday.toLocaleString()}</strong>
+              <div className="flex justify-between items-baseline gap-3 pt-2 border-t border-navy-800 font-extrabold">
+                <span className="text-slate-200">Net Cash Take-Home Today:</span>
+                <strong className="text-rose-300 tabular-nums whitespace-nowrap shrink-0">${analysis.netCashOutToday.toLocaleString()}</strong>
               </div>
-              <div className="flex justify-between text-amber-300 pt-1">
-                <span>10-Yr Fee Drag if Left in Current Plan ({currentFeeRate.toFixed(2)}%/yr):</span>
-                <strong className="tabular-nums">-${analysis.tenYearFeeDragTotal.toLocaleString()}</strong>
+              <div className="flex justify-between items-baseline gap-3 text-amber-300 pt-1">
+                <span>10-Yr Legacy Fee Drag ({currentFeeRate.toFixed(2)}%/yr):</span>
+                <strong className="tabular-nums whitespace-nowrap shrink-0">-${analysis.tenYearFeeDragTotal.toLocaleString()}</strong>
               </div>
             </div>
           </div>
 
           {/* Direct Rollover / 1035 Upside Ledger */}
           <div className="bg-navy-950 p-5 rounded-2xl border border-cyan-500/40 space-y-4">
-            <div className="flex items-center justify-between border-b border-navy-800 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-navy-800 pb-3">
               <div>
-                <span className="text-[10px] text-cyan-400 font-extrabold uppercase tracking-wider block">
+                <span className="text-[10.5px] text-cyan-400 font-extrabold uppercase tracking-wider block">
                   Tax-Free Direct Transfer Upside
                 </span>
-                <h4 className="text-base font-extrabold text-white">
+                <h4 className="text-sm sm:text-base font-extrabold text-white">
                   {transferMode === 'qualified_rollover'
-                    ? 'Direct IRC § 402(c) Rollover Advantage'
-                    : 'Direct IRC § 1035 Tax-Free Exchange Advantage'}
+                    ? 'Direct IRC § 402(c) Rollover'
+                    : 'Direct IRC § 1035 Tax-Free Exchange'}
                 </h4>
               </div>
-              <span className="text-lg font-black text-cyan-300 tabular-nums">
+              <span className="text-base sm:text-lg font-black text-cyan-300 tabular-nums whitespace-nowrap shrink-0">
                 ${analysis.protectedStartingBase.toLocaleString()} Day 1
               </span>
             </div>
 
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between text-slate-300">
-                <span>Immediate Federal Tax &amp; Penalty Trigger:</span>
-                <strong className="text-emerald-400 tabular-nums">$0 (Tax-Deferred Preserved)</strong>
+            <div className="space-y-2.5 text-xs sm:text-[13px]">
+              <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                <span>Immediate Tax &amp; Penalty Trigger:</span>
+                <strong className="text-emerald-400 tabular-nums whitespace-nowrap shrink-0">$0 (Tax-Deferred)</strong>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Upfront Carrier Bonus Credited (+{bonusRatePct}%):</span>
-                <strong className="text-cyan-300 tabular-nums">+${analysis.upfrontBonusDollar.toLocaleString()}</strong>
+              <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                <span>Upfront Carrier Bonus (+{bonusRatePct}%):</span>
+                <strong className="text-cyan-300 tabular-nums whitespace-nowrap shrink-0">+${analysis.upfrontBonusDollar.toLocaleString()}</strong>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>10-Yr Projected Protected Account Value:</span>
-                <strong className="text-gold-300 tabular-nums">${analysis.tenYearProtectedEnd.toLocaleString()}</strong>
+              <div className="flex justify-between items-baseline gap-3 text-slate-300">
+                <span>10-Yr Projected Protected Value:</span>
+                <strong className="text-gold-300 tabular-nums whitespace-nowrap shrink-0">${analysis.tenYearProtectedEnd.toLocaleString()}</strong>
               </div>
-              <div className="flex justify-between pt-2 border-t border-navy-800 text-xs font-extrabold">
-                <span className="text-slate-200">10-Yr Net Advantage vs. Legacy Plan:</span>
-                <strong className="text-emerald-400 tabular-nums">
+              <div className="flex justify-between items-baseline gap-3 pt-2 border-t border-navy-800 font-extrabold">
+                <span className="text-slate-200">10-Yr Net Advantage vs. Legacy:</span>
+                <strong className="text-emerald-400 tabular-nums whitespace-nowrap shrink-0">
                   +${analysis.tenYearAdvantageOverLegacy.toLocaleString()}
                 </strong>
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-3">
-              <div className="text-[11px] text-cyan-100 leading-snug">
-                <strong>10-Yr Advantage vs. Cash-Out:</strong>{' '}
+              <div className="text-xs text-cyan-100 whitespace-nowrap">
+                <strong>10-Yr Gain vs. Cash-Out:</strong>{' '}
                 <span className="text-emerald-300 font-extrabold tabular-nums">
                   +${analysis.tenYearAdvantageOverCashOut.toLocaleString()}
-                </span>{' '}
-                compounded wealth retained.
+                </span>
               </div>
               <button
                 type="button"
@@ -739,7 +731,7 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
                   SoundFX.playClick();
                   onOpenBooking();
                 }}
-                className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-extrabold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 Execute Direct Transfer
               </button>
@@ -751,16 +743,18 @@ export const RolloversDashboard: React.FC<RolloversDashboardProps> = ({
         <div className="bg-navy-950/90 p-5 sm:p-6 rounded-2xl border border-navy-700/80 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-navy-800 pb-3">
             <div>
-              <span className="text-[10px] text-cyan-400 font-extrabold uppercase tracking-wider block">
+              <span className="text-[10.5px] text-cyan-400 font-extrabold uppercase tracking-wider block">
                 10-Year Compounded Wealth Trajectory ({expectedGrossYield.toFixed(1)}% Gross Baseline)
               </span>
               <h4 className="text-base sm:text-xl font-black text-white">
                 Direct Transfer vs. High-Fee Legacy Plan vs. Cash-Out
               </h4>
             </div>
-            <span className="text-xs text-slate-400 tabular-nums">
-              Starting Balance: ${rolloverCapital.toLocaleString()} · Fee Drag: {currentFeeRate.toFixed(2)}%
-            </span>
+            <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400 tabular-nums shrink-0">
+              <span className="whitespace-nowrap">Starting Balance: ${rolloverCapital.toLocaleString()}</span>
+              <span>·</span>
+              <span className="whitespace-nowrap">Fee Drag: {currentFeeRate.toFixed(2)}%</span>
+            </div>
           </div>
 
           <div className="bg-navy-950 p-4 rounded-xl border border-navy-800 h-72 sm:h-80">
